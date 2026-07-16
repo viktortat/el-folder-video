@@ -12,7 +12,6 @@
 1. Соберите portable-версию приложения:
 
    ```powershell
-   cd E:\_Projects3\18\karpaty-db-electron\demo-vik2
    bun run package
    ```
 
@@ -40,10 +39,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-explorer-menu.ps1 -Ap
 
 ## Удаление
 
-Выполните:
+Выполните из корня проекта:
 
 ```powershell
-cd E:\_Projects3\18\karpaty-db-electron\demo-vik2
 powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-explorer-menu.ps1
 ```
 

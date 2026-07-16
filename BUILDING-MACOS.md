@@ -10,7 +10,7 @@
 
 ```bash
 git clone <URL-репозитория>
-cd karpaty-db-electron/demo-vik2
+cd el-folder-video
 bun install
 ```
 
