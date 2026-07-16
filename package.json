@@ -1,0 +1,32 @@
+{
+  "name": "folder-video",
+  "version": "1.0.6",
+  "description": "Локальный браузер папок с видео и покадровым просмотром.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "package:mac": "electron-forge package --platform=darwin",
+    "make:mac": "electron-forge make --platform=darwin",
+    "test": "node --test thumbnail-queue.test.js video-metadata-db.test.js"
+  },
+  "author": "vik",
+  "license": "MIT",
+  "overrides": {
+    "yauzl": "3.4.0"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.4.0",
+    "@electron-forge/maker-dmg": "^7.4.0",
+    "@electron-forge/maker-squirrel": "^7.4.0",
+    "@electron-forge/maker-zip": "^7.4.0",
+    "electron": "^30.5.1",
+    "yauzl": "3.4.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "electron-squirrel-startup": "^1.0.1",
+    "marked": "^18.0.6"
+  }
+}

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Folder-video-vik</title>
+    <link rel="stylesheet" href="app.css?v=home-icon-1" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="tabbar" aria-label="Вкладки">
+        <button id="themeToggle" class="theme-toggle" type="button" title="Переключить тему" aria-label="Переключить тему">☾</button>
+        <button id="favoritesButton" class="favorites-button tabbar-favorites" type="button" title="Открыть избранное" aria-label="Открыть избранное">♡ <span>0</span></button>
+        <button id="settingsButton" class="settings-button" type="button" title="Открыть настройки" aria-label="Открыть настройки">⚙</button>
+        <button id="homeButton" class="tabbar-home" type="button" title="Главная страница" aria-label="Главная страница"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg></button>
+        <div id="tabs" class="tabs"></div>
+        <div class="tabbar-mark">FV / LOCAL</div>
+      </header>
+      <section id="view" class="view"></section>
+      <footer class="app-version-bar"><span id="appVersion"></span></footer>
+      <div id="toast" class="toast" role="status"></div>
+    </main>
+    <script src="thumbnail-queue.js?v=home-icon-1"></script>
+    <script src="app.js?v=home-icon-1"></script>
+  </body>
+</html>
