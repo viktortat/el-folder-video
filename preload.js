@@ -7,8 +7,11 @@ contextBridge.exposeInMainWorld('folderVideo', {
   loadMetadata: (requestId, filePath) => ipcRenderer.invoke('folder-video:metadata-load', requestId, filePath),
   cancelMetadata: requestId => ipcRenderer.invoke('folder-video:metadata-cancel', requestId),
   saveMetadata: metadata => ipcRenderer.invoke('folder-video:metadata-save', metadata),
+  getMetadataTemplate: () => ipcRenderer.invoke('folder-video:metadata-template'),
   renderMarkdown: markdown => ipcRenderer.invoke('folder-video:render-markdown', markdown),
   openMetadataLink: url => ipcRenderer.invoke('folder-video:open-metadata-link', url),
+  openProjectFolder: folderPath => ipcRenderer.invoke('folder-video:open-project-folder', folderPath),
+  syncMetadata: () => ipcRenderer.invoke('folder-video:sync-metadata'),
   getPathForFile: file => webUtils.getPathForFile(file),
   showInFolder: filePath => ipcRenderer.invoke('folder-video:show-in-folder', filePath),
   openInSystemPlayer: filePath => ipcRenderer.invoke('folder-video:open-in-system-player', filePath),
@@ -27,9 +30,6 @@ contextBridge.exposeInMainWorld('folderVideo', {
   getSettings: () => ipcRenderer.invoke('folder-video:get-settings'),
   getDefaultSettings: () => ipcRenderer.invoke('folder-video:get-default-settings'),
   saveSettings: settings => ipcRenderer.invoke('folder-video:save-settings', settings),
-  chooseDatabase: () => ipcRenderer.invoke('folder-video:choose-database'),
-  createDatabase: () => ipcRenderer.invoke('folder-video:create-database'),
-  confirmMetadataBeforeDbSwitch: () => ipcRenderer.invoke('folder-video:confirm-metadata-before-db-switch'),
   confirmCloseSettings: () => ipcRenderer.invoke('folder-video:confirm-close-settings'),
   onOpenTarget: callback => ipcRenderer.on('folder-video:open-target', (_event, target) => callback(target))
 });

@@ -1,16 +1,28 @@
 ﻿const { app, BrowserWindow, dialog, ipcMain, shell, nativeImage, Menu, clipboard } = require('electron');
-const { readdir, lstat, rename, copyFile, unlink, readFile, writeFile, mkdir } = require('node:fs/promises');
+const { readdir, lstat, rename, copyFile, unlink, readFile, writeFile, mkdir, rm } = require('node:fs/promises');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { VideoMetadataDb } = require('./video-metadata-db');
+const { VideoMetadataStore } = require('./video-metadata-store');
 const { hashFile } = require('./hash-file');
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.avi', '.mkv', '.m4v', '.ogv']);
 const BASE_TITLE = 'Folder-video-vik';
 const APP_VERSION = app.getVersion();
 const APP_TITLE = `${BASE_TITLE} v${APP_VERSION}`;
-let metadataDb;
+const DEFAULT_METADATA_TEMPLATE = `<form id="metadataForm">
+  <style>.metadata-template-title{margin:0 0 12px;color:#c9b6ff;font:700 15px Manrope,sans-serif}</style>
+  <p class="metadata-template-title">{{title}}</p>
+  <p class="metadata-hash" title="SHA-256">{{contentHashShort}}</p>
+  <label class="metadata-label">Название<input id="metadataTitle" value="{{title}}" /></label>
+  <label class="metadata-label">YouTube<div class="metadata-input-row"><input id="metadataYoutube" type="url" value="{{youtubeUrl}}" placeholder="https://youtube.com/..." /><button id="openYoutube" type="button" title="Открыть YouTube" aria-label="Открыть YouTube">↗</button></div></label>
+  <label class="metadata-label">Obsidian<div class="metadata-input-row"><input id="metadataObsidian" type="url" value="{{obsidianUrl}}" placeholder="obsidian://open/..." /><button id="openObsidian" type="button" title="Открыть в Obsidian" aria-label="Открыть в Obsidian">↗</button></div></label>
+  <label class="metadata-label">Папка проекта<div class="metadata-input-row"><input id="metadataProjectFolder" value="{{projectFolder}}" /><button id="openProjectFolder" type="button" title="Открыть папку проекта" aria-label="Открыть папку проекта">↗</button></div></label>
+  <div class="metadata-section-head"><span>Описание</span><div class="metadata-mode"><button type="button" data-mode="edit" class="{{editClass}}">Edit</button><button type="button" data-mode="preview" class="{{previewClass}}">Preview</button></div></div>{{descriptionMarkup}}
+  <label class="metadata-label">Теги<div id="metadataTags" class="metadata-tags"></div></label>
+  <footer class="metadata-footer"><span id="metadataState">{{saveState}}</span><button class="metadata-save" type="submit">Сохранить</button></footer>
+</form>`;
+let metadataStore;
 const metadataJobs = new Map();
 let pendingLaunchTarget = null;
 let isRendererReady = false;
@@ -21,7 +33,7 @@ function defaultSettings() {
   return {
     version: 1,
     theme: 'dark',
-    storage: { databasePath: path.join(app.getPath('userData'), 'metadata.sqlite') },
+    storage: { metadataDirectory: path.join(app.getPath('documents'), 'folder-video-metadata'), gitRepositoryUrl: '' },
     viewer: { columns: 3, seconds: 10, scroll: 'center' },
     interface: { metadataCollapsed: false, gridCollapsed: false }
   };
@@ -33,12 +45,13 @@ function normalizeSettings(value) {
   const columns = [3, 4, 5, 6, 8].includes(source.viewer?.columns) ? source.viewer.columns : defaults.viewer.columns;
   const seconds = [5, 10, 15, 30, 60].includes(source.viewer?.seconds) ? source.viewer.seconds : defaults.viewer.seconds;
   const scroll = ['center', 'edge', 'off'].includes(source.viewer?.scroll) ? source.viewer.scroll : defaults.viewer.scroll;
-  const databasePath = typeof source.storage?.databasePath === 'string' && source.storage.databasePath.trim()
-    ? path.resolve(source.storage.databasePath) : defaults.storage.databasePath;
+  const metadataDirectory = typeof source.storage?.metadataDirectory === 'string' && source.storage.metadataDirectory.trim()
+    ? path.resolve(source.storage.metadataDirectory) : defaults.storage.metadataDirectory;
+  const gitRepositoryUrl = typeof source.storage?.gitRepositoryUrl === 'string' ? source.storage.gitRepositoryUrl.trim() : '';
   return {
     version: 1,
     theme: source.theme === 'light' ? 'light' : 'dark',
-    storage: { databasePath }, viewer: { columns, seconds, scroll },
+    storage: { metadataDirectory, gitRepositoryUrl }, viewer: { columns, seconds, scroll },
     interface: { metadataCollapsed: source.interface?.metadataCollapsed === true, gridCollapsed: source.interface?.gridCollapsed === true }
   };
 }
@@ -60,23 +73,13 @@ async function loadSettings() {
 
 async function saveSettings(settings) {
   const normalized = normalizeSettings(settings);
-  let nextDb;
   try {
-    nextDb = new VideoMetadataDb(normalized.storage.databasePath);
-  } catch (error) {
-    return { error: `Не удалось открыть SQLite-базу: ${error.message}` };
-  }
-  nextDb.close();
-  try {
+    await mkdir(normalized.storage.metadataDirectory, { recursive: true });
     await mkdir(path.dirname(settingsPath()), { recursive: true });
     const temporaryPath = `${settingsPath()}.${process.pid}.tmp`;
     await writeFile(temporaryPath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
     await rename(temporaryPath, settingsPath());
-    if (normalized.storage.databasePath !== appSettings.storage.databasePath) {
-      const previousDb = metadataDb;
-      metadataDb = new VideoMetadataDb(normalized.storage.databasePath);
-      previousDb?.close();
-    }
+    if (normalized.storage.metadataDirectory !== appSettings.storage.metadataDirectory) metadataStore = new VideoMetadataStore(normalized.storage.metadataDirectory);
     appSettings = normalized;
     hasSettingsFile = true;
     return { settings: appSettings };
@@ -152,8 +155,16 @@ async function openLaunchTarget(argv) {
   mainWindow.webContents.send('folder-video:open-target', target);
 }
 
-function openMetadataDb() {
-  metadataDb = new VideoMetadataDb(appSettings.storage.databasePath);
+function openMetadataStore() { metadataStore = new VideoMetadataStore(appSettings.storage.metadataDirectory); }
+
+async function ensureMetadataTemplate() {
+  const templatePath = path.join(appSettings.storage.metadataDirectory, 'template.html');
+  try { await readFile(templatePath, 'utf8'); } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    await mkdir(appSettings.storage.metadataDirectory, { recursive: true });
+    await writeFile(templatePath, DEFAULT_METADATA_TEMPLATE, 'utf8');
+  }
+  return templatePath;
 }
 
 function isYouTubeUrl(value) {
@@ -203,6 +214,38 @@ function runFfmpeg(arguments_, onProgress) {
   });
 }
 
+function runGit(directory, args) {
+  return new Promise(resolve => {
+    const child = spawn('git', args, { cwd: directory, windowsHide: true }); let output = '';
+    child.stdout.on('data', chunk => { output = (output + chunk).slice(-8000); }); child.stderr.on('data', chunk => { output = (output + chunk).slice(-8000); });
+    child.once('error', error => resolve({ ok: false, output: error.message })); child.once('close', code => resolve({ ok: code === 0, output: output.trim() }));
+  });
+}
+
+ipcMain.handle('folder-video:sync-metadata', async () => {
+  const { metadataDirectory, gitRepositoryUrl } = appSettings.storage;
+  if (!gitRepositoryUrl) return { error: 'В настройках не указан URL Git-репозитория.' };
+  await mkdir(metadataDirectory, { recursive: true });
+  const probe = await runGit(metadataDirectory, ['rev-parse', '--is-inside-work-tree']);
+  if (!probe.ok) return { error: 'Каталог метаданных не является Git-репозиторием. Клонируйте репозиторий в этот каталог.', details: probe.output };
+  const remote = await runGit(metadataDirectory, ['remote', 'get-url', 'origin']);
+  const remoteResult = remote.ok
+    ? await runGit(metadataDirectory, ['remote', 'set-url', 'origin', gitRepositoryUrl])
+    : await runGit(metadataDirectory, ['remote', 'add', 'origin', gitRepositoryUrl]);
+  if (!remoteResult.ok) return { error: 'Не удалось настроить удалённый Git-репозиторий.', details: remoteResult.output };
+  const pull = await runGit(metadataDirectory, ['pull', '--rebase']);
+  if (!pull.ok) return { error: 'Конфликт Git: синхронизация остановлена.', details: pull.output };
+  const add = await runGit(metadataDirectory, ['add', '-A']);
+  if (!add.ok) return { error: 'Не удалось подготовить изменения Git.', details: add.output };
+  const changed = await runGit(metadataDirectory, ['diff', '--cached', '--quiet']);
+  if (!changed.ok) {
+    const commit = await runGit(metadataDirectory, ['commit', '-m', 'Обновить метаданные видео']);
+    if (!commit.ok) return { error: 'Не удалось создать Git-коммит.', details: commit.output };
+  }
+  const push = await runGit(metadataDirectory, ['push']);
+  return push.ok ? { success: true, details: push.output } : { error: 'Не удалось отправить изменения в Git.', details: push.output };
+});
+
 function preserveWindowsFileDates(sourcePath, destinationPath) {
   const command = '$source = Get-Item -LiteralPath $env:FOLDER_VIDEO_SOURCE; $destination = Get-Item -LiteralPath $env:FOLDER_VIDEO_DESTINATION; $destination.CreationTime = $source.CreationTime; $destination.LastWriteTime = $source.LastWriteTime; $destination.LastAccessTime = $source.LastAccessTime';
   return new Promise((resolve, reject) => {
@@ -216,7 +259,7 @@ function preserveWindowsFileDates(sourcePath, destinationPath) {
 
 function validateMetadata(metadata) {
   if (!metadata || typeof metadata.contentHash !== 'string' || !/^[a-f0-9]{64}$/i.test(metadata.contentHash)) return 'Не удалось идентифицировать видео';
-  if (typeof metadata.filePath !== 'string' || typeof metadata.youtubeUrl !== 'string' || typeof metadata.obsidianUrl !== 'string' || typeof metadata.descriptionMarkdown !== 'string' || !Array.isArray(metadata.tags)) return 'Некорректные данные';
+  if (typeof metadata.title !== 'string' || typeof metadata.originalFileName !== 'string' || typeof metadata.youtubeUrl !== 'string' || typeof metadata.obsidianUrl !== 'string' || typeof metadata.projectFolder !== 'string' || typeof metadata.descriptionMarkdown !== 'string' || !Array.isArray(metadata.tags)) return 'Некорректные данные';
   if (!isYouTubeUrl(metadata.youtubeUrl)) return 'Укажите корректную ссылку YouTube';
   if (!isObsidianUrl(metadata.obsidianUrl)) return 'Obsidian-ссылка должна начинаться с obsidian://';
   return null;
@@ -333,7 +376,7 @@ ipcMain.handle('folder-video:metadata-load', async (_event, requestId, filePath)
   try {
     const contentHash = await hashFile(filePath, controller.signal);
     if (controller.signal.aborted) return { canceled: true };
-    return { metadata: metadataDb.load(contentHash, filePath) };
+    return { metadata: await metadataStore.load(contentHash, path.basename(filePath)) };
   } catch (error) {
     if (error.name === 'AbortError') return { canceled: true };
     return { error: error.message || 'Не удалось вычислить хеш файла' };
@@ -346,10 +389,13 @@ ipcMain.handle('folder-video:metadata-cancel', (_event, requestId) => {
   const controller = metadataJobs.get(requestId);
   if (controller) controller.abort();
 });
+ipcMain.handle('folder-video:metadata-template', async () => {
+  try { return { template: await readFile(await ensureMetadataTemplate(), 'utf8') }; } catch { return { template: '' }; }
+});
 
-ipcMain.handle('folder-video:metadata-save', (_event, metadata) => {
+ipcMain.handle('folder-video:metadata-save', async (_event, metadata) => {
   const error = validateMetadata(metadata);
-  return error ? { error } : { metadata: metadataDb.save(metadata) };
+  try { return error ? { error } : { metadata: await metadataStore.save(metadata) }; } catch (saveError) { return { error: saveError.message }; }
 });
 
 ipcMain.handle('folder-video:render-markdown', async (_event, markdown) => {
@@ -361,6 +407,10 @@ ipcMain.handle('folder-video:render-markdown', async (_event, markdown) => {
 ipcMain.handle('folder-video:open-metadata-link', async (_event, url) => {
   if (typeof url !== 'string' || (!isYouTubeUrl(url) && !isObsidianUrl(url))) return 'Некорректная ссылка';
   return shell.openExternal(url);
+});
+ipcMain.handle('folder-video:open-project-folder', async (_event, folderPath) => {
+  if (typeof folderPath !== 'string' || !folderPath.trim()) return 'Папка проекта не задана';
+  return shell.openPath(folderPath);
 });
 
 ipcMain.handle('folder-video:delete-file', async (event, filePath) => {
@@ -558,29 +608,6 @@ ipcMain.handle('folder-video:get-app-info', () => ({ version: APP_VERSION }));
 ipcMain.handle('folder-video:get-settings', () => ({ settings: appSettings, hasConfig: hasSettingsFile }));
 ipcMain.handle('folder-video:get-default-settings', () => ({ settings: defaultSettings() }));
 ipcMain.handle('folder-video:save-settings', async (_event, settings) => saveSettings(settings));
-ipcMain.handle('folder-video:choose-database', async event => {
-  const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), {
-    title: 'Выберите SQLite-базу', properties: ['openFile'],
-    filters: [{ name: 'SQLite database', extensions: ['sqlite', 'sqlite3', 'db'] }, { name: 'Все файлы', extensions: ['*'] }]
-  });
-  return result.canceled ? null : result.filePaths[0];
-});
-ipcMain.handle('folder-video:create-database', async event => {
-  const result = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender), {
-    title: 'Создать SQLite-базу', defaultPath: 'metadata.sqlite',
-    filters: [{ name: 'SQLite database', extensions: ['sqlite'] }]
-  });
-  return result.canceled ? null : result.filePath;
-});
-ipcMain.handle('folder-video:confirm-metadata-before-db-switch', async event => {
-  const result = await dialog.showMessageBox(BrowserWindow.fromWebContents(event.sender), {
-    type: 'warning', title: 'Несохранённые метаданные',
-    message: 'В открытых вкладках есть несохранённые метаданные.',
-    detail: 'Перед сменой SQLite-базы сохраните их в текущую базу или отбросьте изменения.',
-    buttons: ['Сохранить', 'Не сохранять', 'Отмена'], defaultId: 0, cancelId: 2, noLink: true
-  });
-  return ['save', 'discard', 'cancel'][result.response];
-});
 ipcMain.handle('folder-video:confirm-close-settings', async event => {
   const result = await dialog.showMessageBox(BrowserWindow.fromWebContents(event.sender), {
     type: 'question', title: 'Несохранённые настройки', message: 'Сохранить изменения перед закрытием вкладки?',
@@ -599,7 +626,7 @@ if (!gotSingleInstanceLock) {
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   await loadSettings();
-  openMetadataDb();
+  openMetadataStore();
   createWindow();
   openLaunchTarget(process.argv);
   app.on('activate', () => {
@@ -610,5 +637,3 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
-
-app.on('before-quit', () => { metadataDb?.close(); });

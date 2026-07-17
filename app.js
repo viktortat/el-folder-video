@@ -4,9 +4,10 @@
   const STRIP_COUNT = 10;
   const thumbnailQueue = new ThumbnailQueue(1);
   const supported = "MP4, WebM, MOV, AVI, MKV, M4V, OGV";
-  const DEFAULT_SETTINGS = { version: 1, theme: "dark", storage: { databasePath: "" }, viewer: { columns: 3, seconds: 10, scroll: "center" }, interface: { metadataCollapsed: false, gridCollapsed: false } };
+  const DEFAULT_SETTINGS = { version: 1, theme: "dark", storage: { metadataDirectory: "", gitRepositoryUrl: "" }, viewer: { columns: 3, seconds: 10, scroll: "center" }, interface: { metadataCollapsed: false, gridCollapsed: false } };
   const SETTINGS_FIELDS = [
-    { group: "Хранилище", key: "storage.databasePath", label: "SQLite-база", type: "database", hint: "Файл с метаданными видео" },
+    { group: "Хранилище", key: "storage.metadataDirectory", label: "Каталог метаданных", type: "text", hint: "JSON-файлы и template.html" },
+    { group: "Хранилище", key: "storage.gitRepositoryUrl", label: "Git-репозиторий", type: "text", hint: "URL удалённого репозитория" },
     { group: "Просмотр видео", key: "viewer.columns", label: "Колонки кадров", type: "select", options: [3, 4, 5, 6, 8] },
     { group: "Просмотр видео", key: "viewer.seconds", label: "Шаг кадров", type: "select", options: [5, 10, 15, 30, 60], suffix: "секунд" },
     { group: "Просмотр видео", key: "viewer.scroll", label: "Автопрокрутка", type: "select", options: [{ value: "center", label: "По центру" }, { value: "edge", label: "До ближайшего края" }, { value: "off", label: "Выключена" }] },
@@ -314,7 +315,7 @@
     state.activeTab = tab.id; render();
   }
   function settingsControlMarkup(field, value) {
-    if (field.type === "database") return "<div class=\"settings-path\"><input data-setting=\"" + field.key + "\" value=\"" + escapeHtml(value) + "\" readonly/><button type=\"button\" data-database-action=\"choose\">Выбрать…</button><button type=\"button\" data-database-action=\"create\">Создать…</button></div>";
+    if (field.type === "text") return "<input data-setting=\"" + field.key + "\" value=\"" + escapeHtml(value) + "\" />";
     if (field.type === "checkbox") return "<label class=\"settings-switch\"><input data-setting=\"" + field.key + "\" type=\"checkbox\"" + (value ? " checked" : "") + "/><span></span></label>";
     var options = field.options.map(function(option) { var item = typeof option === "object" ? option : { value: option, label: String(option) + (field.suffix ? " " + field.suffix : "") }; return "<option value=\"" + escapeHtml(item.value) + "\"" + (String(item.value) === String(value) ? " selected" : "") + ">" + escapeHtml(item.label) + "</option>"; }).join("");
     return "<select data-setting=\"" + field.key + "\">" + options + "</select>";
@@ -324,19 +325,13 @@
     var markup = Object.keys(groups).map(function(group) { return "<section class=\"settings-group\"><h2>" + escapeHtml(group) + "</h2>" + groups[group].map(function(field) { return "<label class=\"settings-row\"><span><strong>" + escapeHtml(field.label) + "</strong>" + (field.hint ? "<small>" + escapeHtml(field.hint) + "</small>" : "") + "</span>" + settingsControlMarkup(field, readSetting(tab.draft, field.key)) + "</label>"; }).join("") + "</section>"; }).join("");
     view.innerHTML = "<section class=\"settings-view\"><form id=\"settingsForm\"><header class=\"settings-head\"><div><p>Настройки</p><h1>Параметры приложения</h1></div><span>Изменения применяются после сохранения</span></header>" + markup + "<footer class=\"settings-footer\"><span id=\"settingsState\">" + (tab.dirty ? "Есть несохранённые изменения" : "Сохранено") + "</span><button id=\"resetSettings\" type=\"button\" class=\"settings-reset\">Сбросить</button><button type=\"submit\" class=\"primary\">Сохранить</button></footer></form></section>";
     $("#settingsForm").querySelectorAll("[data-setting]").forEach(function(control) { control.addEventListener("change", function() { var field = SETTINGS_FIELDS.find(function(item) { return item.key === control.dataset.setting; }); var value = field.type === "checkbox" ? control.checked : field.type === "select" && typeof readSetting(tab.draft, field.key) === "number" ? Number(control.value) : control.value; writeSetting(tab.draft, field.key, value); tab.dirty = true; $("#settingsState").textContent = "Есть несохранённые изменения"; }); });
-    $("#settingsForm").querySelectorAll("[data-database-action]").forEach(function(button) { button.addEventListener("click", async function() { var databasePath = button.dataset.databaseAction === "choose" ? await window.folderVideo.chooseDatabase() : await window.folderVideo.createDatabase(); if (!databasePath) return; writeSetting(tab.draft, "storage.databasePath", databasePath); tab.dirty = true; renderSettings(tab); }); });
     $("#resetSettings").addEventListener("click", async function() { if (!confirm("Сбросить настройки к значениям по умолчанию?")) return; var result = await window.folderVideo.getDefaultSettings(); tab.draft = result.settings; tab.dirty = true; renderSettings(tab); });
     $("#settingsForm").addEventListener("submit", function(event) { event.preventDefault(); saveSettingsTab(tab); });
   }
   async function saveSettingsTab(tab) {
-    var switchingDatabase = tab.draft.storage.databasePath !== state.settings.storage.databasePath;
+    var switchingDatabase = tab.draft.storage.metadataDirectory !== state.settings.storage.metadataDirectory;
     var dirtyPlayers = state.tabs.filter(function(item) { return item.type === "player" && item.metadataDirty; });
-    if (switchingDatabase && dirtyPlayers.length) {
-      var choice = await window.folderVideo.confirmMetadataBeforeDbSwitch();
-      if (choice === "cancel") return;
-      if (choice === "save") for (var index = 0; index < dirtyPlayers.length; index++) await saveMetadata(dirtyPlayers[index]);
-      if (choice === "discard") dirtyPlayers.forEach(function(item) { item.metadataDirty = false; });
-    }
+    if (switchingDatabase && dirtyPlayers.length && !confirm("В открытых вкладках есть несохранённые метаданные. Сменить каталог без сохранения?")) return;
     var result = await window.folderVideo.saveSettings(tab.draft);
     if (result.error) { notice(result.error); return; }
     state.settings = result.settings; state.metadataCollapsed = state.settings.interface.metadataCollapsed; state.gridCollapsed = state.settings.interface.gridCollapsed; applyTheme(state.settings.theme, false);
@@ -345,15 +340,18 @@
     render(); notice("Настройки сохранены", true);
   }
 
+  async function syncMetadata() { var result = await window.folderVideo.syncMetadata(); if (result.success) notice("Метаданные синхронизированы", true); else notice((result.error || "Ошибка синхронизации") + (result.details ? ": " + result.details.slice(0, 500) : "")); }
   function renderHome() {
     view.innerHTML = "<section class=\"folder-view\">" +
       "<header class=\"toolbar\">" +
         "<button id=\"choose\" class=\"primary\">Select Folder</button>" +
+        "<button id=\"syncMetadata\" class=\"refresh-folder\" type=\"button\" title=\"Синхронизировать метаданные с Git\" aria-label=\"Синхронизировать метаданные с Git\">⇅</button>" +
         "<div class=\"path-field\">Выберите или перетащите папку с видео…</div>" +
       "</header>" +
       "<div id=\"folderContent\" class=\"folder-content\">" + (visibleRecentFolders().length ? recentFoldersMarkup() : emptyHomeMarkup()) + "</div>" +
     "</section>";
     $("#choose").addEventListener("click", chooseFolder);
+    $("#syncMetadata").addEventListener("click", syncMetadata);
     var content = $("#folderContent");
     content.addEventListener("dragover", function(event) { event.preventDefault(); });
     content.addEventListener("drop", handleDrop);
@@ -675,18 +673,21 @@
     render();
   }
 
-  function metadataCopy(metadata) { return { contentHash: metadata.contentHash, filePath: metadata.filePath, lastSeenAt: metadata.lastSeenAt, updatedAt: metadata.updatedAt, youtubeUrl: metadata.youtubeUrl, obsidianUrl: metadata.obsidianUrl, descriptionMarkdown: metadata.descriptionMarkdown, tags: [].concat(metadata.tags || []) }; }
+  function metadataCopy(metadata) { return { contentHash: metadata.contentHash, title: metadata.title || "", originalFileName: metadata.originalFileName || "", youtubeUrl: metadata.youtubeUrl, obsidianUrl: metadata.obsidianUrl, projectFolder: metadata.projectFolder || "", descriptionMarkdown: metadata.descriptionMarkdown, tags: [].concat(metadata.tags || []), createdAt: metadata.createdAt || null, updatedAt: metadata.updatedAt || null }; }
   function metadataPanelMarkup(tab) { return "<aside id=\"metadataPanel\" class=\"metadata-panel" + (tab.metadataCollapsed ? " collapsed" : "") + "\"><header class=\"metadata-head\"><button id=\"metadataCollapse\" class=\"collapse\" title=\"" + (tab.metadataCollapsed ? "Развернуть метаданные" : "Свернуть метаданные") + "\">" + (tab.metadataCollapsed ? "▶" : "◀") + "</button><strong>METADATA</strong></header><div id=\"metadataContent\" class=\"metadata-content\"></div></aside>"; }
   function metadataFormMarkup(tab) {
     var data = tab.metadataDraft;
     var description = tab.markdownMode === "edit" ? "<textarea id=\"metadataDescription\" placeholder=\"Markdown-описание видео\">" + escapeHtml(data.descriptionMarkdown) + "</textarea>" : "<article id=\"metadataPreview\" class=\"metadata-preview\">Загрузка предпросмотра…</article>";
-    return "<form id=\"metadataForm\"><p class=\"metadata-hash\" title=\"SHA-256\">" + data.contentHash.slice(0, 12) + "…</p><label class=\"metadata-label\">YouTube<div class=\"metadata-input-row\"><input id=\"metadataYoutube\" type=\"url\" value=\"" + escapeHtml(data.youtubeUrl) + "\" placeholder=\"https://youtube.com/...\" /><button id=\"openYoutube\" type=\"button\" title=\"Открыть YouTube\" aria-label=\"Открыть YouTube\">↗</button></div></label><label class=\"metadata-label\">Obsidian<div class=\"metadata-input-row\"><input id=\"metadataObsidian\" type=\"url\" value=\"" + escapeHtml(data.obsidianUrl) + "\" placeholder=\"obsidian://open/...\" /><button id=\"openObsidian\" type=\"button\" title=\"Открыть в Obsidian\" aria-label=\"Открыть в Obsidian\">↗</button></div></label><div class=\"metadata-section-head\"><span>Описание</span><div class=\"metadata-mode\"><button type=\"button\" data-mode=\"edit\" class=\"" + (tab.markdownMode === "edit" ? "active" : "") + "\">Edit</button><button type=\"button\" data-mode=\"preview\" class=\"" + (tab.markdownMode === "preview" ? "active" : "") + "\">Preview</button></div></div>" + description + "<label class=\"metadata-label\">Теги<div id=\"metadataTags\" class=\"metadata-tags\"></div></label><footer class=\"metadata-footer\"><span id=\"metadataState\">" + (tab.metadataDirty ? "Не сохранено" : "Сохранено") + "</span><button class=\"metadata-save\" type=\"submit\">Сохранить</button></footer></form>";
+    return "<form id=\"metadataForm\"><p class=\"metadata-hash\" title=\"SHA-256\">" + data.contentHash.slice(0, 12) + "…</p><label class=\"metadata-label\">Название<input id=\"metadataTitle\" value=\"" + escapeHtml(data.title) + "\" /></label><label class=\"metadata-label\">YouTube<div class=\"metadata-input-row\"><input id=\"metadataYoutube\" type=\"url\" value=\"" + escapeHtml(data.youtubeUrl) + "\" placeholder=\"https://youtube.com/...\" /><button id=\"openYoutube\" type=\"button\" title=\"Открыть YouTube\" aria-label=\"Открыть YouTube\">↗</button></div></label><label class=\"metadata-label\">Obsidian<div class=\"metadata-input-row\"><input id=\"metadataObsidian\" type=\"url\" value=\"" + escapeHtml(data.obsidianUrl) + "\" placeholder=\"obsidian://open/...\" /><button id=\"openObsidian\" type=\"button\" title=\"Открыть в Obsidian\" aria-label=\"Открыть в Obsidian\">↗</button></div></label><label class=\"metadata-label\">Папка проекта<div class=\"metadata-input-row\"><input id=\"metadataProjectFolder\" value=\"" + escapeHtml(data.projectFolder) + "\" /><button id=\"openProjectFolder\" type=\"button\" title=\"Открыть папку проекта\" aria-label=\"Открыть папку проекта\">↗</button></div></label><div class=\"metadata-section-head\"><span>Описание</span><div class=\"metadata-mode\"><button type=\"button\" data-mode=\"edit\" class=\"" + (tab.markdownMode === "edit" ? "active" : "") + "\">Edit</button><button type=\"button\" data-mode=\"preview\" class=\"" + (tab.markdownMode === "preview" ? "active" : "") + "\">Preview</button></div></div>" + description + "<label class=\"metadata-label\">Теги<div id=\"metadataTags\" class=\"metadata-tags\"></div></label><footer class=\"metadata-footer\"><span id=\"metadataState\">" + (tab.metadataDirty ? "Не сохранено" : "Сохранено") + "</span><button class=\"metadata-save\" type=\"submit\">Сохранить</button></footer></form>";
   }
+  function sanitizeMetadataTemplate(html) { var template = document.createElement("template"); template.innerHTML = html; template.content.querySelectorAll("script,iframe,object,embed,link").forEach(function(element) { element.remove(); }); template.content.querySelectorAll("*").forEach(function(element) { Array.from(element.attributes).forEach(function(attribute) { if (/^on/i.test(attribute.name) || (attribute.name === "src" && /^(https?:|javascript:)/i.test(attribute.value))) element.removeAttribute(attribute.name); }); }); return template.innerHTML; }
+  function templateValue(value) { return escapeHtml(value == null ? "" : String(value)); }
+  function metadataTemplateMarkup(tab, html) { var data = tab.metadataDraft; var description = tab.markdownMode === "edit" ? "<textarea id=\"metadataDescription\" placeholder=\"Markdown-описание видео\">" + escapeHtml(data.descriptionMarkdown) + "</textarea>" : "<article id=\"metadataPreview\" class=\"metadata-preview\">Загрузка предпросмотра…</article>"; var values = { title: data.title, contentHashShort: data.contentHash.slice(0, 12) + "…", youtubeUrl: data.youtubeUrl, obsidianUrl: data.obsidianUrl, projectFolder: data.projectFolder, editClass: tab.markdownMode === "edit" ? "active" : "", previewClass: tab.markdownMode === "preview" ? "active" : "", saveState: tab.metadataDirty ? "Не сохранено" : "Сохранено" }; var result = sanitizeMetadataTemplate(html).replace(/{{descriptionMarkup}}/g, description); Object.keys(values).forEach(function(key) { result = result.replace(new RegExp("{{" + key + "}}", "g"), templateValue(values[key])); }); return result; }
   function renderMetadataContent(tab) {
     var content = $("#metadataContent"); if (!content || active() !== tab) return;
     if (tab.metadataStatus !== "ready" && tab.metadataStatus !== "error") { content.innerHTML = "<p class=\"metadata-loading\">Идентифицируем файл…<small>Считаем SHA-256</small></p>"; return; }
     if (tab.metadataStatus === "error") { content.innerHTML = "<p class=\"metadata-loading error\">" + escapeHtml(tab.metadataError) + "<button id=\"metadataRetry\" type=\"button\">Повторить</button></p>"; $("#metadataRetry").addEventListener("click", function() { loadMetadata(tab); }); return; }
-    content.innerHTML = metadataFormMarkup(tab); bindMetadataForm(tab); if (tab.markdownMode === "preview") renderMarkdownPreview(tab);
+    content.innerHTML = metadataFormMarkup(tab); window.folderVideo.getMetadataTemplate().then(function(result) { if (!content.isConnected || active() !== tab || tab.metadataStatus !== "ready") return; if (result.template) content.innerHTML = metadataTemplateMarkup(tab, result.template); bindMetadataForm(tab); if (tab.markdownMode === "preview") renderMarkdownPreview(tab); });
   }
   function renderMetadataTags(tab) {
     var host = $("#metadataTags"); if (!host) return;
@@ -699,9 +700,9 @@
   function updateMetadataState(tab) { var stateEl = $("#metadataState"); if (stateEl) stateEl.textContent = tab.metadataDirty ? "Не сохранено" : "Сохранено"; }
   function bindMetadataForm(tab) {
     renderMetadataTags(tab);
-    [["metadataYoutube", "youtubeUrl"], ["metadataObsidian", "obsidianUrl"], ["metadataDescription", "descriptionMarkdown"]].forEach(function(pair) { var input = $("#" + pair[0]); if (input) input.addEventListener("input", function(event) { tab.metadataDraft[pair[1]] = event.target.value; tab.metadataDirty = true; updateMetadataState(tab); }); });
+    [["metadataTitle", "title"], ["metadataYoutube", "youtubeUrl"], ["metadataObsidian", "obsidianUrl"], ["metadataProjectFolder", "projectFolder"], ["metadataDescription", "descriptionMarkdown"]].forEach(function(pair) { var input = $("#" + pair[0]); if (input) input.addEventListener("input", function(event) { tab.metadataDraft[pair[1]] = event.target.value; tab.metadataDirty = true; updateMetadataState(tab); }); });
     $("#metadataForm").addEventListener("submit", function(event) { event.preventDefault(); saveMetadata(tab); });
-    $("#openYoutube").addEventListener("click", function() { openMetadataLink(tab.metadataDraft.youtubeUrl); }); $("#openObsidian").addEventListener("click", function() { openMetadataLink(tab.metadataDraft.obsidianUrl); });
+    $("#openYoutube").addEventListener("click", function() { openMetadataLink(tab.metadataDraft.youtubeUrl); }); $("#openObsidian").addEventListener("click", function() { openMetadataLink(tab.metadataDraft.obsidianUrl); }); $("#openProjectFolder").addEventListener("click", async function() { var error = await window.folderVideo.openProjectFolder(tab.metadataDraft.projectFolder); if (error) notice(error); });
     $("#metadataForm").querySelectorAll("[data-mode]").forEach(function(button) { button.addEventListener("click", function() { tab.markdownMode = button.dataset.mode; renderMetadataContent(tab); }); });
   }
   async function openMetadataLink(url) { if (!url) return; var error = await window.folderVideo.openMetadataLink(url); if (error) notice(error); }
