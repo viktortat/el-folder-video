@@ -139,15 +139,7 @@
   settingsButton.addEventListener("click", openSettings);
   const homeButton = $("#homeButton");
   homeButton.addEventListener("click", function() {
-    var existing = state.tabs.find(function(tab) { return tab.type === "folder"; });
-    if (existing) {
-      state.activeTab = existing.id;
-    } else {
-      state.tabs.push({ id: "folder", type: "folder", label: "Видео" });
-      state.activeTab = "folder";
-    }
-    state.folderPath = "";
-    state.files = [];
+    state.activeTab = null;
     render();
   });
   document.addEventListener("keydown", function(event) { if (event.key === "Escape") { if (state.favoritesOpen) closeFavorites(); closeCtxMenu(); } }); document.addEventListener("click", function() { closeCtxMenu(); });
