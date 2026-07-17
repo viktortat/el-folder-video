@@ -5,6 +5,7 @@ const ThumbnailQueue = require("./thumbnail-queue.js");
 
 async function run() {
   await preservesFifoOrder();
+  await respectsConfiguredConcurrency();
   await prioritizesActivePage();
 }
 
@@ -24,6 +25,21 @@ async function preservesFifoOrder() {
 
   assert.equal(peak, 1, "очередь не должна запускать несколько декодирований одновременно");
   assert.deepEqual(completed, [0, 1, 2, 3], "задачи должны выполняться в порядке постановки");
+}
+
+async function respectsConfiguredConcurrency() {
+  const queue = new ThumbnailQueue(2);
+  let active = 0;
+  let peak = 0;
+
+  await Promise.all([0, 1, 2, 3].map(() => queue.enqueue(async () => {
+    active += 1;
+    peak = Math.max(peak, active);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    active -= 1;
+  })));
+
+  assert.equal(peak, 2, "очередь должна использовать заданный безопасный параллелизм");
 }
 
 async function prioritizesActivePage() {

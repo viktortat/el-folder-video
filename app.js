@@ -2,7 +2,7 @@
   "use strict";
 
   const STRIP_COUNT = 10;
-  const thumbnailQueue = new ThumbnailQueue(1);
+  const thumbnailQueue = new ThumbnailQueue(2);
   const supported = "MP4, WebM, MOV, AVI, MKV, M4V, OGV";
   const DEFAULT_SETTINGS = { version: 1, theme: "dark", storage: { metadataDirectory: "", gitRepositoryUrl: "" }, viewer: { columns: 3, seconds: 10, scroll: "center" }, interface: { metadataCollapsed: false, gridCollapsed: false } };
   const SETTINGS_FIELDS = [
@@ -520,7 +520,12 @@
         var generation = state.thumbnailGeneration;
         var pending = thumbnailQueue.enqueue(function() {
           return generation === state.thumbnailGeneration
-            ? captureFrames(video.url, duration, STRIP_COUNT, function() { return priority === state.thumbnailPriority; })
+            ? captureFrames(video.url, duration, STRIP_COUNT, function() { return priority === state.thumbnailPriority; }, function(frame, index, time) {
+              var cell = cells[index];
+              if (!cell || !cell.isConnected || priority !== state.thumbnailPriority) return;
+              cell.querySelector(".time").textContent = formatTime(time);
+              if (frame) { cell.classList.add("ready"); cell.insertAdjacentHTML("afterbegin", "<img src=\"" + frame + "\" alt=\"\" />"); }
+            })
             : null;
         }, priority);
         pendingEntry = { promise: pending, priority: priority };
@@ -538,7 +543,7 @@
       var frame = frames[index];
       var time = duration * (index / Math.max(1, STRIP_COUNT - 1));
       cell.querySelector(".time").textContent = formatTime(time);
-      if (frame) { cell.classList.add("ready"); cell.insertAdjacentHTML("afterbegin", "<img src=\"" + frame + "\" alt=\"\" />"); }
+      if (frame && !cell.querySelector("img")) { cell.classList.add("ready"); cell.insertAdjacentHTML("afterbegin", "<img src=\"" + frame + "\" alt=\"\" />"); }
     });
   }
 
@@ -951,13 +956,15 @@
     return frameRect.top >= scrollRect.top && frameRect.bottom <= scrollRect.bottom;
   }
 
-  async function captureFrames(url, duration, count, shouldContinue) {
+  async function captureFrames(url, duration, count, shouldContinue, onFrame) {
     var times = [];
     var lastFrameTime = Math.max(0, duration - 0.1);
     for (var fi = 0; fi < count; fi++) {
       times.push(Math.min(lastFrameTime, duration * fi / Math.max(1, count - 1)));
     }
-    return captureFrameTimes(url, times, null, shouldContinue);
+    return captureFrameTimes(url, times, function(image, index) {
+      if (onFrame) onFrame(image, index, times[index]);
+    }, shouldContinue);
   }
   async function captureGridFrames(url, items, onFrame) {
     await captureFrameTimes(url, items.map(function(item) { return item.time; }), function(image, index) {
