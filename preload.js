@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('folderVideo', {
   chooseFolder: () => ipcRenderer.invoke('folder-video:choose-folder'),
   scan: (folderPath, recursive) => ipcRenderer.invoke('folder-video:scan', folderPath, recursive),
   readVideo: filePath => ipcRenderer.invoke('folder-video:read-video', filePath),
+  getParentFolder: filePath => ipcRenderer.invoke('folder-video:parent-folder', filePath),
   loadMetadata: (requestId, filePath) => ipcRenderer.invoke('folder-video:metadata-load', requestId, filePath),
   cancelMetadata: requestId => ipcRenderer.invoke('folder-video:metadata-cancel', requestId),
   saveMetadata: metadata => ipcRenderer.invoke('folder-video:metadata-save', metadata),

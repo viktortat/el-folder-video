@@ -351,6 +351,16 @@ ipcMain.handle('folder-video:copy-path', async (_event, filePath) => {
   return false;
 });
 
+ipcMain.handle('folder-video:parent-folder', async (_event, filePath) => {
+  if (typeof filePath !== 'string') return null;
+  try {
+    const stat = await lstat(filePath);
+    return stat.isFile() ? path.dirname(filePath) : null;
+  } catch {
+    return null;
+  }
+});
+
 ipcMain.handle('folder-video:copy-image', async (_event, imageData) => {
   const webpDataUrl = imageData && imageData.webpDataUrl;
   const bitmapDataUrl = imageData && imageData.bitmapDataUrl;

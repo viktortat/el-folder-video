@@ -195,19 +195,28 @@
   /* context menu */
   var ctxMenu = null;
   function closeCtxMenu() { if (ctxMenu) { ctxMenu.remove(); ctxMenu = null; } }
-  function showCtxMenu(event, filePath) {
+  function showCtxMenu(event, filePath, playerTab, player) {
     closeCtxMenu();
     var menu = document.createElement('div');
     menu.className = 'ctx-menu';
     menu.style.left = event.clientX + 'px';
     menu.style.top = event.clientY + 'px';
-    menu.innerHTML = '<button data-action="copy">Копировать полный путь</button><div class="sep"></div><button data-action="move">Перенести в другую папку</button><button class="danger" data-action="delete">Удалить видео</button>';
+    var playerActions = playerTab && player
+      ? '<button data-action="screenshot">Сделать скриншот текущего кадра</button><button data-action="go-to-video">Перейти на видео</button>'
+      : '';
+    menu.innerHTML = playerActions + '<button data-action="copy-name">Скопировать название без расширения</button><button data-action="copy">Скопировать полный путь к файлу</button><div class="sep"></div><button data-action="move">Перенести в другую папку</button><button class="danger" data-action="delete">Удалить видео</button>';
     menu.querySelectorAll('button').forEach(function(btn) {
       btn.addEventListener('click', function() {
         closeCtxMenu();
-        if (btn.dataset.action === 'copy') {
+        if (btn.dataset.action === 'screenshot' && playerTab && player) {
+          takeVideoScreenshot(playerTab, player);
+        } else if (btn.dataset.action === 'copy-name') {
+          copyVideoNameByPath(filePath);
+        } else if (btn.dataset.action === 'copy') {
           window.folderVideo.copyPath(filePath);
           notice('Путь скопирован в буфер обмена', true);
+        } else if (btn.dataset.action === 'go-to-video') {
+          goToVideoInFolder(filePath);
         } else if (btn.dataset.action === 'move') {
           moveFile(filePath);
         } else if (btn.dataset.action === 'delete') {
@@ -222,6 +231,28 @@
       if (mr.right > window.innerWidth) menu.style.left = (window.innerWidth - mr.width - 4) + 'px';
       if (mr.bottom > window.innerHeight) menu.style.top = (window.innerHeight - mr.height - 4) + 'px';
     });
+  }
+  function focusVideoRow(filePath) {
+    state.filterText = '';
+    var index = sortedFiles().findIndex(function(item) { return item.path === filePath; });
+    if (index === -1) { notice('Видео отсутствует в папке.'); return; }
+    state.page = Math.floor(index / Math.max(1, state.pageSize)) + 1;
+    state.activeTab = 'folder';
+    render();
+    requestAnimationFrame(function() {
+      var row = document.querySelector('.row[data-path="' + CSS.escape(filePath) + '"]');
+      if (!row) return;
+      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      row.classList.add('located');
+      setTimeout(function() { row.classList.remove('located'); }, 1400);
+    });
+  }
+  async function goToVideoInFolder(filePath) {
+    if (state.files.some(function(item) { return item.path === filePath; })) { focusVideoRow(filePath); return; }
+    var folderPath = await window.folderVideo.getParentFolder(filePath);
+    if (!folderPath) { notice('Видео больше недоступно по исходному пути.'); return; }
+    await loadFolder(folderPath, true);
+    focusVideoRow(filePath);
   }
   async function moveFile(filePath) {
     var playerTab = active();
@@ -461,11 +492,16 @@
     var folder = window.folderVideo.getPathForFile(file);
     if (folder) loadFolder(folder); else notice("Не удалось получить путь перетащенной папки.");
   }
-  async function loadFolder(folder) {
+  async function loadFolder(folder, preserveTabs) {
     addRecentFolder(folder);
     state.folderPath = folder; state.page = 1;
-    state.tabs = [{ id: "folder", type: "folder", label: "Видео" }];
-    state.activeTab = "folder"; state.thumbnailGeneration += 1; state.stripCache.clear(); state.stripPending.clear(); state.frameCache.clear(); state.durationCache.clear(); await window.folderVideo.setTitle(folder); render(); await scanCurrentFolder();
+    if (preserveTabs) {
+      if (!state.tabs.some(function(tab) { return tab.type === "folder"; })) state.tabs.unshift({ id: "folder", type: "folder", label: "Видео" });
+    } else {
+      state.tabs = [{ id: "folder", type: "folder", label: "Видео" }];
+      state.frameCache.clear(); state.durationCache.clear();
+    }
+    state.activeTab = "folder"; state.thumbnailGeneration += 1; state.stripCache.clear(); state.stripPending.clear(); await window.folderVideo.setTitle(folder); render(); await scanCurrentFolder();
   }
   window.folderVideo.onOpenTarget(async function(target) {
     if (!target || typeof target.path !== "string") return;
@@ -565,6 +601,12 @@
   }
   async function copyVideoName(tab) {
     try { await copyText(videoNameStem(tab.video)); notice("Название скопировано", true); }
+    catch (error) { notice("Не удалось скопировать название: " + error.message); }
+  }
+  async function copyVideoNameByPath(filePath) {
+    var video = state.files.find(function(item) { return item.path === filePath; });
+    if (!video) { notice("Видео отсутствует в текущем списке."); return; }
+    try { await copyText(videoNameStem(video)); notice("Название скопировано", true); }
     catch (error) { notice("Не удалось скопировать название: " + error.message); }
   }
   function speedUpButtonMarkup(running, progress) {
@@ -787,6 +829,7 @@
     $("#playerDelete").addEventListener("click", function() { deleteFile(tab.video.path); });
     $("#videoScreenshot").addEventListener("click", function() { takeVideoScreenshot(tab, player); });
     $("#copyVideoName").addEventListener("click", function() { copyVideoName(tab); });
+    player.addEventListener("contextmenu", function(event) { event.preventDefault(); showCtxMenu(event, tab.video.path, tab, player); });
     $("#previousVideo").addEventListener("click", function() { switchPlayerVideo(tab, -1); });
     $("#nextVideo").addEventListener("click", function() { switchPlayerVideo(tab, 1); });
     document.querySelectorAll(".playback-rate").forEach(function(button) {
@@ -802,12 +845,17 @@
     });
     $("#metadataCollapse").addEventListener("click", function() { tab.metadataCollapsed = !tab.metadataCollapsed; state.metadataCollapsed = tab.metadataCollapsed; savePanelPreferences(); renderPlayer(tab); });
     $("#collapse").addEventListener("click", function() { tab.collapsed = !tab.collapsed; state.gridCollapsed = tab.collapsed; savePanelPreferences(); renderPlayer(tab); });
-    [["columns", "columns"], ["seconds", "seconds"], ["scroll", "scroll"]].forEach(function(pair) {
-      $("#" + pair[0]).addEventListener("change", function(event) {
-        tab[pair[1]] = pair[0] === "scroll" ? event.target.value : Number(event.target.value);
-        renderPlayer(tab);
-      });
+    $("#columns").addEventListener("change", function(event) {
+      tab.columns = Number(event.target.value);
+      var grid = $("#frameGrid");
+      if (grid) grid.style.gridTemplateColumns = "repeat(" + tab.columns + ", minmax(0, 1fr))";
+      updateActiveFrame(player.currentTime, tab, false);
     });
+    $("#seconds").addEventListener("change", function(event) {
+      tab.seconds = Number(event.target.value);
+      renderFrameGrid(tab, player);
+    });
+    $("#scroll").addEventListener("change", function(event) { tab.scroll = event.target.value; });
     renderMetadataContent(tab); if (!tab.metadata && tab.metadataStatus === "idle") loadMetadata(tab);
     player.addEventListener("loadedmetadata", function() {
       if (!Number.isFinite(player.duration) || !player.duration) { notice("Этот файл не удаётся декодировать в Chromium."); return; }
@@ -838,7 +886,7 @@
     setupGridInteraction(tab, player);
     startMarkerLoop(tab, player);
     updateActiveFrame(player.currentTime, tab, true);
-    var taskId = ++state.task; var cacheKey = fileKey(tab.video) + "|" + tab.seconds;
+    var taskId = ++state.task; var cacheKey = fileKey(tab.video);
     var frames = state.frameCache.get(cacheKey);
     if (!frames) { frames = new Map(); state.frameCache.set(cacheKey, frames); }
     var cells = [].concat(Array.from(grid.querySelectorAll(".frame")));
@@ -920,8 +968,10 @@
   }
 
   function startMarkerLoop(tab, player) {
+    var loopId = (tab.markerLoopId || 0) + 1;
+    tab.markerLoopId = loopId;
     function tick() {
-      if (!player.isConnected || (active() ? active().id : null) !== tab.id) return;
+      if (tab.markerLoopId !== loopId || !player.isConnected || (active() ? active().id : null) !== tab.id) return;
       if (!tab.isDragging) updateActiveFrame(player.currentTime, tab, false);
       requestAnimationFrame(tick);
     }
@@ -967,9 +1017,13 @@
     }, shouldContinue);
   }
   async function captureGridFrames(url, items, onFrame) {
-    await captureFrameTimes(url, items.map(function(item) { return item.time; }), function(image, index) {
-      return onFrame(items[index], image);
-    });
+    var workers = [[], []];
+    items.forEach(function(item, index) { workers[index % workers.length].push(item); });
+    await Promise.all(workers.filter(function(workerItems) { return workerItems.length; }).map(function(workerItems) {
+      return captureFrameTimes(url, workerItems.map(function(item) { return item.time; }), function(image, index) {
+        return onFrame(workerItems[index], image);
+      });
+    }));
   }
   async function captureFrameTimes(url, times, onFrame, shouldContinue) {
     var frames = [];
