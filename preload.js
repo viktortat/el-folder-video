@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('folderVideo', {
   chooseFolder: () => ipcRenderer.invoke('folder-video:choose-folder'),
+  createFileShortcut: filePath => ipcRenderer.invoke('folder-video:create-file-shortcut', filePath),
   scan: (folderPath, recursive) => ipcRenderer.invoke('folder-video:scan', folderPath, recursive),
   readVideo: filePath => ipcRenderer.invoke('folder-video:read-video', filePath),
   getParentFolder: filePath => ipcRenderer.invoke('folder-video:parent-folder', filePath),

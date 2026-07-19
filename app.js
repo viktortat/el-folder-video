@@ -17,7 +17,7 @@
   const state = {
     folderPath: "", files: [], skipped: 0, recursive: false, filterText: "", sort: "date", asc: false, page: 1, pageSize: 10,
     tabs: [{ id: "folder", type: "folder", label: "Видео" }], activeTab: "folder",
-    stripCache: new Map(), stripPending: new Map(), frameCache: new Map(), durationCache: new Map(), task: 0, thumbnailGeneration: 0, thumbnailPriority: 0,
+    stripCache: new Map(), stripPending: new Map(), frameCache: new Map(), durationCache: new Map(), captureVideos: new Map(), task: 0, thumbnailGeneration: 0, thumbnailPriority: 0,
     recentFolders: JSON.parse(localStorage.getItem("folder-video-recent") || "[]"),
     pinnedFolders: JSON.parse(localStorage.getItem("folder-video-pinned") || "[]"),
     favorites: JSON.parse(localStorage.getItem("folder-video-favorites") || "[]"), favoritesOpen: false,
@@ -204,7 +204,7 @@
     var playerActions = playerTab && player
       ? '<button data-action="screenshot">Сделать скриншот текущего кадра</button><button data-action="go-to-video">Перейти на видео</button>'
       : '';
-    menu.innerHTML = playerActions + '<button data-action="copy-name">Скопировать название без расширения</button><button data-action="copy">Скопировать полный путь к файлу</button><div class="sep"></div><button data-action="move">Перенести в другую папку</button><button class="danger" data-action="delete">Удалить видео</button>';
+    menu.innerHTML = playerActions + '<button data-action="copy-name">Скопировать название без расширения</button><button data-action="copy">Скопировать полный путь к файлу</button><button data-action="shortcut">Сделать ссылку на файл в папке</button><div class="sep"></div><button data-action="move">Перенести в другую папку</button><button class="danger" data-action="delete">Удалить видео</button>';
     menu.querySelectorAll('button').forEach(function(btn) {
       btn.addEventListener('click', function() {
         closeCtxMenu();
@@ -215,6 +215,8 @@
         } else if (btn.dataset.action === 'copy') {
           window.folderVideo.copyPath(filePath);
           notice('Путь скопирован в буфер обмена', true);
+        } else if (btn.dataset.action === 'shortcut') {
+          createFileShortcut(filePath);
         } else if (btn.dataset.action === 'go-to-video') {
           goToVideoInFolder(filePath);
         } else if (btn.dataset.action === 'move') {
@@ -231,6 +233,12 @@
       if (mr.right > window.innerWidth) menu.style.left = (window.innerWidth - mr.width - 4) + 'px';
       if (mr.bottom > window.innerHeight) menu.style.top = (window.innerHeight - mr.height - 4) + 'px';
     });
+  }
+  async function createFileShortcut(filePath) {
+    var result = await window.folderVideo.createFileShortcut(filePath);
+    if (!result || result.canceled) return;
+    if (result.error) { notice('Не удалось создать ярлык: ' + result.error); return; }
+    notice('Ярлык создан: ' + result.shortcutPath, true);
   }
   function focusVideoRow(filePath) {
     state.filterText = '';
@@ -263,6 +271,7 @@
     if (!result) return;
     if (result.canceled) return;
     if (result.error) { notice('Ошибка: ' + result.error); return; }
+    if (result.unchanged) { notice('Файл уже находится в выбранной папке', true); return; }
     if (result.sourceDeleted) {
       state.files = state.files.filter(function(file) { return file.path !== filePath; });
       if (isFavorite(filePath)) {
@@ -670,7 +679,26 @@
       notice("Не удалось скопировать WebP-скрин: " + error.message);
     }
   }
+  function releaseVideoElement(video) {
+    if (!video) return;
+    try { video.pause(); video.removeAttribute("src"); video.load(); } catch {}
+  }
+  function releaseCaptureVideos(url) {
+    var videos = state.captureVideos.get(url);
+    if (!videos) return;
+    videos.forEach(releaseVideoElement);
+    state.captureVideos.delete(url);
+  }
+  function releasePlayerResources(url) {
+    releaseCaptureVideos(url);
+    var player = $("#player");
+    if (player && (player.src === url || player.currentSrc === url)) {
+      state.task += 1;
+      releaseVideoElement(player);
+    }
+  }
   function setPlayerVideo(tab, video) {
+    releasePlayerResources(tab.video.url);
     if (tab.metadataRequestId) window.folderVideo.cancelMetadata(tab.metadataRequestId);
     tab.video = video; tab.label = video.name; tab.currentTime = 0; tab.isDragging = false;
     tab.metadataStatus = "idle"; tab.metadata = null; tab.metadataDraft = null; tab.metadataDirty = false; tab.metadataRequestId = null; tab.markdownMode = "edit";
@@ -703,6 +731,7 @@
       if (choice === "save") { await saveSettingsTab(tab); if (tab.dirty) return; }
     }
     if (tab.metadataRequestId) window.folderVideo.cancelMetadata(tab.metadataRequestId);
+    if (tab.type === "player") releasePlayerResources(tab.video.url);
     state.tabs.splice(idx, 1);
     if (state.activeTab === id) {
       state.activeTab = state.tabs.length
@@ -1029,6 +1058,9 @@
     var frames = [];
     if (!times.length) return frames;
     var video = document.createElement("video");
+    var captureVideos = state.captureVideos.get(url);
+    if (!captureVideos) { captureVideos = new Set(); state.captureVideos.set(url, captureVideos); }
+    captureVideos.add(video);
     var canvas = document.createElement("canvas");
     try {
       if (shouldContinue && !shouldContinue()) return null;
@@ -1048,8 +1080,12 @@
         if (onFrame && onFrame(frame, fi) === false) break;
       }
     } finally {
-      video.removeAttribute("src");
-      video.load();
+      var activeCaptures = state.captureVideos.get(url);
+      if (activeCaptures) {
+        activeCaptures.delete(video);
+        if (!activeCaptures.size) state.captureVideos.delete(url);
+      }
+      releaseVideoElement(video);
       video.remove();
     }
     return frames;

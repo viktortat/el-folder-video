@@ -1,112 +1,52 @@
 # Folder-video
 
-Локальное Electron-приложение для просмотра видео в выбранной папке. Оно показывает видео рядами с миниатюрами, открывает отдельные вкладки плеера и позволяет точно переходить по ролику через сетку кадров. Генерация лент миниатюр выполняется через одну общую очередь: повторные рендеры используют ту же незавершённую задачу и не перегружают видеодекодер.
+[Русская версия](README.ru.md)
 
-[Пользовательская документация со скриншотами](docs/guide-users.md)
+Folder-video is a local desktop app for finding the right moment in a video folder. It shows each file as a strip of frames, then opens the selected video in its own tab with a detailed frame grid.
 
-## Возможности
+![Frame-by-frame video review](docs/screens/video-review.png)
 
-- Выбор папки через нативный диалог или перетаскиванием папки в окно.
-- Открытие папки или отдельного видео из контекстного меню Проводника Windows (после установки интеграции).
-- Поддержка `mp4`, `webm`, `mov`, `avi`, `mkv`, `m4v`, `ogv`.
-- Рекурсивное сканирование, сортировка по имени или дате, оба направления сортировки.
-- Фильтрация по подстроке в имени файла без учёта регистра; фильтр сохраняется при пагинации.
-- Адаптивное число строк на странице и закреплённая снизу пагинация: фиксированная ширина кнопок, переход на страницу по номеру и удобные кнопки «‹»/«›».
-- Вкладки плееров в одном окне.
-- Переключение скорости воспроизведения видео: `1x`, `1.5x` и `2x`.
-- Сетка кадров с непрерывным маркером просмотра, точным seek кликом и перетаскиванием; недостающие кадры декодируются параллельно и переиспользуются при смене шага и числа колонок.
-- Переключение светлой и тёмной темы с сохранением выбора в `localStorage`.
-- Главный экран хранит до 10 последних папок в сетке 2 × 5; папки можно закреплять, чтобы новые открытия их не вытесняли.
-- Избранные видео из разных папок: список сохраняется между запусками, открывается отдельной панелью и не создаёт кэш миниатюр; добавить или убрать текущее видео можно также кнопкой `♡`/`♥` в панели плеера.
-- Открытие текущего файла через системный плеер Windows (например, VLC, если он назначен приложением по умолчанию).
-- Контекстное меню строки и панель плеера: копирование пути, перенос в другую папку и удаление в корзину Windows с обязательным подтверждением. После переноса или удаления в плеере открывается следующий ролик, а для последнего — предыдущий.
-- Ускорение видео в 2 раза через установленный в системе FFmpeg: создаётся копия `<имя>_2x.ext`, сохраняются даты исходного файла, показывается прогресс и готовый файл открывается в новой вкладке.
-- Левая панель метаданных: заголовок, ссылки YouTube/Obsidian, локальная папка проекта, Markdown и теги в отдельных JSON-файлах.
-- Полный `SHA-256` связывает метаданные с содержимым файла, поэтому данные сохраняются после переноса ролика в другую папку.
+## Screenshots
 
-## Требования
+<table>
+  <tr>
+    <td><img src="docs/screens/video-library.png" alt="Video library with frame strips and page navigation"></td>
+    <td><img src="docs/screens/settings.png" alt="Folder-video settings for metadata storage and frame-grid preferences"></td>
+  </tr>
+</table>
 
-- Windows 10/11 для полного набора функций приложения.
-- [Bun](https://bun.sh/) для установки зависимостей и запуска команд.
-- [FFmpeg](https://ffmpeg.org/) в `PATH`, если требуется ускорение видео.
+## What it does
 
-Поддержка контекстного меню Проводника, сохранение дат при ускорении и операции с корзиной Windows доступны только в Windows. Для macOS предусмотрены отдельные команды упаковки из [BUILDING-MACOS.md](BUILDING-MACOS.md); часть Windows-специфичных функций там недоступна.
+- Opens a local folder from the native picker, by drag and drop, or from Windows Explorer after installing the optional context-menu integration.
+- Scans supported video files, including subfolders when requested, and lets you filter, sort, and page through the results.
+- Opens several videos in tabs. Each tab has standard playback controls, selectable playback speeds, and a frame grid for seeking by click or drag.
+- Keeps up to ten recent folders and a separate list of favourite videos across launches.
+- Stores a title, YouTube link, Obsidian link, Markdown notes, and tags in JSON files keyed by the video's SHA-256 content hash. The metadata stays with the same file after it is moved.
+- Can save the current frame, copy the filename without its extension, reveal the file, open it in the system player, move it, or send it to the Windows Recycle Bin after confirmation.
+- Creates a two-times-speed copy with FFmpeg when `ffmpeg` is available on `PATH`.
 
-## Метаданные
+## Install and start
 
-Основной `config.json` хранится в каталоге данных Electron. По умолчанию JSON-метаданные находятся в `Documents/folder-video-metadata`: один файл `<SHA-256>.json` на видео и редактируемый `template.html`. Абсолютный путь исходного видео не сохраняется.
+If you have received `folder-video-setup.exe`, run it and follow the Windows installer. It creates Start menu and desktop shortcuts.
 
-## Настройки
+To build the installer from source, use the instructions in the [technical documentation](docs/README.md). The portable build is a folder at `out\\folder-video-win32-x64`; keep its files together and run `folder-video.exe` from that folder.
 
-Кнопка с шестерёнкой открывает отдельную вкладку настроек. В конфигурации задаются каталог метаданных и URL Git-репозитория. Кнопка синхронизации на главной вкладке выполняет `pull --rebase`, коммит и `push`; при конфликте показывает подробный вывод Git.
+## Everyday use
 
-## Запуск в разработке
+1. Choose a folder or drop one into the window.
+2. Use the frame strips, filter, and sort controls to find a video.
+3. Open a video row. Adjust the number of frame-grid columns, the time interval, and automatic scrolling if needed.
+4. Click or drag across the grid to seek. The arrow keys, Home, End, and Space also control the player.
+5. Add notes and tags in the metadata panel, then save them.
 
-```powershell
-bun install
-bun run start
-```
+## Supported files and limits
 
-## Проверки
+Folder-video scans `mp4`, `webm`, `mov`, `avi`, `mkv`, `m4v`, and `ogv` files. Whether a file plays also depends on its codec support in Chromium.
 
-```powershell
-node --check main.js
-node --check preload.js
-node --check app.js
-bun run test
-git diff --check
-```
+The full feature set targets Windows 10 and Windows 11. Windows Explorer integration, Recycle Bin deletion, preserved timestamps on accelerated copies, and file moves are Windows features. The app works with local files and does not upload video content. FFmpeg is required only for making an accelerated copy.
 
-## Сборка
+[Technical documentation](docs/README.md)
 
-Для portable-версии:
-
-```powershell
-bun run package
-```
-
-Готовое приложение: `out\folder-video-win32-x64\folder-video.exe`.
-
-Для установщика Windows:
-
-```powershell
-bun run make
-```
-
-Подробности об установке и удалении — в [BUILDING-WINDOWS.md](BUILDING-WINDOWS.md). Сборка для macOS описана в [BUILDING-MACOS.md](BUILDING-MACOS.md).
-
-Доступные scripts также включают `bun run package:mac` и `bun run make:mac`; эти команды нужно выполнять на macOS.
-
-## Контекстное меню Проводника
-
-После создания portable-сборки или установки приложения выполните один раз из корня проекта:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install-explorer-menu.ps1
-```
-
-Скрипт добавляет для папок пункт «Open in Folder-video», а для `mp4`, `webm`, `mov`, `avi`, `mkv`, `m4v`, `ogv` — «Open video in Folder-video». Путь к приложению можно передать явно первым параметром. Удаление пунктов: `powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-explorer-menu.ps1`.
-
-Полная инструкция: [EXPLORER-MENU.md](EXPLORER-MENU.md).
-
-## Архитектура
-
-| Файл | Назначение |
-| --- | --- |
-| `main.js` | Главное Electron-процесс: окно, сканирование папок, IPC, JSON-метаданные, Git и системный плеер. |
-| `preload.js` | Узкий безопасный API `window.folderVideo` для renderer-процесса. |
-| `app.js` | Состояние приложения, вкладки, сортировка, пагинация, плеер и миниатюры. |
-| `thumbnail-queue.js` | Очередь декодирования миниатюр с ограничением параллелизма. |
-| `video-metadata-store.js` | Чтение и атомарная запись JSON-метаданных видео. |
-| `hash-file.js` | Потоковый расчёт отменяемого `SHA-256` файла. |
-| `app.css` | Тёмная и светлая темы, адаптивная раскладка. |
-| `index.html` | Минимальная HTML-оболочка приложения. |
-| `folder-video-prd.md` | Согласованные требования к продукту. |
-
-## Безопасность
-
-В renderer-процессе отключён Node.js (`nodeIntegration: false`), включены `contextIsolation` и sandbox. Взаимодействие с файловой системой и ОС выполняется только через обработчики IPC в `main.js`, API которых публикуется через `preload.js`.
-
-## Лицензия
+## License
 
 MIT.

@@ -9,7 +9,7 @@
     "make": "electron-forge make",
     "package:mac": "electron-forge package --platform=darwin",
     "make:mac": "electron-forge make --platform=darwin",
-    "test": "node --test thumbnail-queue.test.js"
+    "test": "node --test thumbnail-queue.test.js move-file-conflict.test.js"
   },
   "author": "vik",
   "license": "MIT",

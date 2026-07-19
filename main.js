@@ -5,6 +5,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { VideoMetadataStore } = require('./video-metadata-store');
 const { hashFile } = require('./hash-file');
+const { createSameFileMoveConflict } = require('./move-file-conflict');
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.avi', '.mkv', '.m4v', '.ogv']);
 const BASE_TITLE = 'Folder-video-vik';
@@ -257,6 +258,20 @@ function preserveWindowsFileDates(sourcePath, destinationPath) {
   });
 }
 
+function createWindowsShortcut(targetPath, shortcutPath) {
+  const command = '$shell = New-Object -ComObject WScript.Shell; $shortcut = $shell.CreateShortcut($env:FOLDER_VIDEO_SHORTCUT_PATH); $shortcut.TargetPath = $env:FOLDER_VIDEO_SHORTCUT_TARGET; $shortcut.WorkingDirectory = Split-Path -Parent $env:FOLDER_VIDEO_SHORTCUT_TARGET; $shortcut.Save()';
+  return new Promise((resolve, reject) => {
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+      windowsHide: true,
+      env: { ...process.env, FOLDER_VIDEO_SHORTCUT_TARGET: targetPath, FOLDER_VIDEO_SHORTCUT_PATH: shortcutPath }
+    });
+    let stderr = '';
+    child.once('error', reject);
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.once('close', code => code === 0 ? resolve() : reject(new Error(stderr || 'Не удалось создать ярлык')));
+  });
+}
+
 function validateMetadata(metadata) {
   if (!metadata || typeof metadata.contentHash !== 'string' || !/^[a-f0-9]{64}$/i.test(metadata.contentHash)) return 'Не удалось идентифицировать видео';
   if (typeof metadata.title !== 'string' || typeof metadata.originalFileName !== 'string' || typeof metadata.youtubeUrl !== 'string' || typeof metadata.obsidianUrl !== 'string' || typeof metadata.projectFolder !== 'string' || typeof metadata.descriptionMarkdown !== 'string' || !Array.isArray(metadata.tags)) return 'Некорректные данные';
@@ -349,6 +364,30 @@ ipcMain.handle('folder-video:copy-path', async (_event, filePath) => {
     return true;
   }
   return false;
+});
+
+ipcMain.handle('folder-video:create-file-shortcut', async (event, filePath) => {
+  if (process.platform !== 'win32' || typeof filePath !== 'string') return { error: 'Создание ярлыков поддерживается только в Windows' };
+  try {
+    if (!(await lstat(filePath)).isFile()) return { error: 'Видео не найдено' };
+  } catch { return { error: 'Видео не найдено' }; }
+  const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), {
+    title: 'Выберите папку для ярлыка', properties: ['openDirectory']
+  });
+  if (result.canceled) return { canceled: true };
+  const directory = result.filePaths[0];
+  const shortcutName = path.basename(filePath);
+  let shortcutPath = path.join(directory, `${shortcutName}.lnk`);
+  for (let index = 2; ; index += 1) {
+    try { await lstat(shortcutPath); shortcutPath = path.join(directory, `${shortcutName} (${index}).lnk`); } catch (error) {
+      if (error.code === 'ENOENT') break;
+      return { error: `Не удалось проверить папку: ${error.message}` };
+    }
+  }
+  try {
+    await createWindowsShortcut(filePath, shortcutPath);
+    return { success: true, shortcutPath };
+  } catch (error) { return { error: error.message || 'Не удалось создать ярлык' }; }
 });
 
 ipcMain.handle('folder-video:parent-folder', async (_event, filePath) => {
@@ -450,7 +489,7 @@ ipcMain.handle('folder-video:delete-file', async (event, filePath) => {
   }
 });
 
-ipcMain.handle('folder-video:move-file', async (_event, sourcePath) => {
+ipcMain.handle('folder-video:move-file', async (event, sourcePath) => {
   if (typeof sourcePath !== 'string') return { error: 'Invalid path' };
   const result = await dialog.showOpenDialog({
     title: 'Выберите папку для перемещения',
@@ -458,10 +497,6 @@ ipcMain.handle('folder-video:move-file', async (_event, sourcePath) => {
   });
   if (result.canceled) return { canceled: true };
   const dest = path.join(result.filePaths[0], path.basename(sourcePath));
-  const isSamePath = process.platform === 'win32'
-    ? path.resolve(sourcePath).toLowerCase() === path.resolve(dest).toLowerCase()
-    : path.resolve(sourcePath) === path.resolve(dest);
-  if (isSamePath) return { error: 'Выберите другую папку' };
 
   let sourceInfo;
   try {
@@ -478,6 +513,16 @@ ipcMain.handle('folder-video:move-file', async (_event, sourcePath) => {
   }
   if (destinationInfo?.isDirectory()) {
     return { error: 'В папке назначения уже есть папка с таким именем' };
+  }
+
+  const sameFileConflict = createSameFileMoveConflict(sourcePath, dest);
+  if (sameFileConflict) {
+    const confirmation = await dialog.showMessageBox(
+      BrowserWindow.fromWebContents(event.sender),
+      sameFileConflict.dialogOptions
+    );
+    if (confirmation.response !== 0) return { canceled: true };
+    return sameFileConflict.confirmedResult;
   }
 
   const formatSize = size => {
@@ -525,7 +570,7 @@ ipcMain.handle('folder-video:move-file', async (_event, sourcePath) => {
   }
 
   const moveWithRetry = async (from, to) => {
-    for (let attempt = 0; attempt < 5; attempt += 1) {
+    for (let attempt = 0; attempt < 12; attempt += 1) {
       try {
         await rename(from, to);
         return { success: true };
@@ -545,7 +590,7 @@ ipcMain.handle('folder-video:move-file', async (_event, sourcePath) => {
           }
         }
         if (error.code !== 'EBUSY' && error.code !== 'EPERM') return { error };
-        if (attempt < 4) await new Promise(resolve => setTimeout(resolve, 400));
+        if (attempt < 11) await new Promise(resolve => setTimeout(resolve, 250));
       }
     }
     return { error: new Error('Файл занят системой. Закройте плеер и попробуйте снова.') };
