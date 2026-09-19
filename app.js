@@ -15,7 +15,7 @@
     { group: "Интерфейс", key: "interface.gridCollapsed", label: "Сворачивать панель кадров", type: "checkbox" }
   ];
   const state = {
-    folderPath: "", files: [], skipped: 0, recursive: false, filterText: "", sort: "date", asc: false, page: 1, pageSize: 10,
+    folderPath: "", files: [], skipped: 0, recursive: false, hideEmptyFiles: false, recentDaysEnabled: localStorage.getItem("folder-video-recent-days-enabled") === "true", recentDays: normalizeRecentDays(localStorage.getItem("folder-video-recent-days")), filterText: "", sort: "date", asc: false, page: 1, pageSize: 10,
     tabs: [{ id: "folder", type: "folder", label: "Видео" }], activeTab: "folder",
     stripCache: new Map(), stripPending: new Map(), frameCache: new Map(), durationCache: new Map(), captureVideos: new Map(), task: 0, thumbnailGeneration: 0, thumbnailPriority: 0,
     recentFolders: JSON.parse(localStorage.getItem("folder-video-recent") || "[]"),
@@ -48,6 +48,7 @@
   }).catch(function() {});
 
   function escapeHtml(value) { const node = document.createElement("span"); node.textContent = value; return node.innerHTML; }
+  function normalizeRecentDays(value) { var days = Number(value); return Number.isFinite(days) && days >= 1 ? Math.min(36500, Math.floor(days)) : 7; }
   function formatSize(bytes) { if (bytes < 1024) return bytes + " B"; if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB"; if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB"; return (bytes / 1073741824).toFixed(2) + " GB"; }
   function formatDate(value) { return new Date(value).toLocaleString([], { year: "2-digit", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }); }
   function formatTime(value) { if (!Number.isFinite(value)) return "—"; const h = Math.floor(value / 3600); const m = Math.floor((value % 3600) / 60); const s = Math.floor(value % 60); return h ? h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0") : m + ":" + String(s).padStart(2, "0"); }
@@ -189,7 +190,10 @@
   }
   function filteredFiles() {
     var query = state.filterText.toLowerCase();
-    return sortedFiles().filter(function(file) { return !query || file.name.toLowerCase().includes(query); });
+    var earliestDate = Date.now() - state.recentDays * 86400000;
+    return sortedFiles().filter(function(file) {
+      return (!state.hideEmptyFiles || file.size > 0) && (!state.recentDaysEnabled || file.lastModified >= earliestDate) && (!query || file.name.toLowerCase().includes(query));
+    });
   }
 
   /* context menu */
@@ -416,9 +420,11 @@
         "<button id=\"refreshFolder\" class=\"refresh-folder\" type=\"button\" title=\"Обновить список файлов\" aria-label=\"Обновить список файлов\"" + (state.folderPath ? "" : " disabled") + ">↻</button>" +
         "<div class=\"path-field\" title=\"" + escapeHtml(state.folderPath) + "\">" + (state.folderPath ? escapeHtml(state.folderPath) : "Выберите или перетащите папку с видео…") + "</div>" +
         "<input id=\"filter\" class=\"filter\" type=\"search\" value=\"" + escapeHtml(state.filterText) + "\" placeholder=\"Фильтр файлов\" title=\"Фильтр по имени файла\" aria-label=\"Фильтр по имени файла\" autocomplete=\"off\" />" +
-        "<label class=\"check\"><input id=\"recursive\" type=\"checkbox\" " + (state.recursive ? "checked" : "") + "/> Recursive</label>" +
+        "<label class=\"recent-days-filter\" title=\"Показывать видео, изменённые за указанное число дней\"><input id=\"recentDaysEnabled\" type=\"checkbox\" " + (state.recentDaysEnabled ? "checked" : "") + "/> За <input id=\"recentDays\" type=\"number\" min=\"1\" max=\"36500\" step=\"1\" value=\"" + state.recentDays + "\" inputmode=\"numeric\" aria-label=\"Количество дней для фильтра\" /> дней</label>" +
+        "<div class=\"scan-options\"><label class=\"check\"><input id=\"recursive\" type=\"checkbox\" " + (state.recursive ? "checked" : "") + "/> Recursive</label>" +
+        "<label class=\"check\" title=\"Скрыть видеофайлы с размером 0 КБ\"><input id=\"hideEmptyFiles\" type=\"checkbox\" " + (state.hideEmptyFiles ? "checked" : "") + "/> Не 0 КБ</label></div>" +
         "<div class=\"sort\"><span>Sort</span><select id=\"sort\"><option value=\"date\" " + (state.sort === "date" ? "selected" : "") + ">Date</option><option value=\"name\" " + (state.sort === "name" ? "selected" : "") + ">Name</option></select><button id=\"direction\" title=\"Изменить направление\">" + (state.asc ? "▲" : "▼") + "</button></div>" +
-        "<span class=\"count\">" + files.length + (state.filterText ? " / " + state.files.length : "") + " videos</span>" +
+        "<span class=\"count\">" + files.length + (state.filterText || state.hideEmptyFiles || state.recentDaysEnabled ? " / " + state.files.length : "") + " videos</span>" +
       "</header>" +
       "<div id=\"folderContent\" class=\"folder-content\">" + (rows.length ? rows.map(function(v) { return rowMarkup(v); }).join("") + pagination(pages) : emptyMarkup()) + "</div>" +
     "</section>";
@@ -434,6 +440,13 @@
       }
     });
     $("#recursive").addEventListener("change", function(event) { state.recursive = event.target.checked; scanCurrentFolder(); });
+    $("#hideEmptyFiles").addEventListener("change", function(event) { state.hideEmptyFiles = event.target.checked; state.page = 1; renderFolder(); });
+    $("#recentDaysEnabled").addEventListener("change", function(event) {
+      state.recentDaysEnabled = event.target.checked; localStorage.setItem("folder-video-recent-days-enabled", String(state.recentDaysEnabled)); state.page = 1; renderFolder();
+    });
+    $("#recentDays").addEventListener("change", function(event) {
+      state.recentDays = normalizeRecentDays(event.target.value); localStorage.setItem("folder-video-recent-days", String(state.recentDays)); state.page = 1; renderFolder();
+    });
     $("#filter").addEventListener("input", function(event) {
       var selectionStart = event.target.selectionStart; var selectionEnd = event.target.selectionEnd;
       state.filterText = event.target.value; state.page = 1; renderFolder();
@@ -467,7 +480,7 @@
 
   function emptyMarkup() {
     if (!state.folderPath) return visibleRecentFolders().length ? recentFoldersMarkup() : emptyHomeMarkup();
-    var message = state.filterText ? "По фильтру ничего не найдено" : "Видео не найдены";
+    var message = state.filterText || state.hideEmptyFiles || state.recentDaysEnabled ? "По фильтру ничего не найдено" : "Видео не найдены";
     return "<div class=\"empty\"><div class=\"empty-inner\"><div class=\"empty-icon\"><img src=\"assets/folder-video.png\" alt=\"\" /></div><strong>" + message + "</strong><small>Измените фильтр или выберите другую папку<br>" + supported + "</small></div></div>";
   }
   function rowMarkup(video) {

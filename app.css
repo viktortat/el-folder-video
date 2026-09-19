@@ -108,3 +108,7 @@ body.light .metadata-panel { background:#f5f7fa; border-color:#d1d9e4; } body.li
 
 .recent-folder-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); grid-template-rows:repeat(5,auto); grid-auto-flow:column; gap:6px; }
 @media(max-width:1250px) { .player-layout { grid-template-columns:280px minmax(360px,1fr) 300px; }.player-layout.metadata-collapsed { grid-template-columns:42px minmax(360px,1fr) 300px; }.player-layout.grid-collapsed { grid-template-columns:280px minmax(360px,1fr) 42px; }.player-layout.metadata-collapsed.grid-collapsed { grid-template-columns:42px minmax(360px,1fr) 42px; } }
+
+.scan-options { display:flex; flex-direction:column; gap:3px; }.scan-options .check { white-space:nowrap; }
+.recent-days-filter { display:flex; align-items:center; gap:4px; color:var(--muted); font-size:11px; cursor:pointer; white-space:nowrap; user-select:none; }.recent-days-filter > input[type="checkbox"] { margin:0; accent-color:var(--accent); }.recent-days-filter > input[type="number"] { width:42px; height:27px; box-sizing:border-box; border:1px solid #252c36; border-radius:5px; outline:none; padding:0 4px; color:var(--ink); background:#0e1014; font:11px "DM Mono",monospace; text-align:center; }.recent-days-filter > input[type="number"]:focus { border-color:var(--accent-2); box-shadow:0 0 0 2px rgba(136,89,242,.18); }
+body.light .recent-days-filter > input[type="number"] { background:#fff; border-color:#cfd7e3; color:#263449; }
