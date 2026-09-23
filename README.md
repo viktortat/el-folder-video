@@ -19,8 +19,8 @@ Folder-video is a local desktop app for finding the right moment in a video fold
 
 - Opens a local folder from the native picker, by drag and drop, or from Windows Explorer after installing the optional context-menu integration.
 - Scans supported video files, including subfolders when requested, and lets you filter by name or last-modified age, hide zero-byte files, sort, and page through the results.
-- Opens several videos in tabs. Each tab has standard playback controls, selectable playback speeds, and a frame grid for seeking by click or drag.
-- Keeps up to ten recent folders and a separate list of favourite videos across launches.
+- Opens several videos in tabs. Each tab has standard playback controls, a dedicated play/pause button, selectable playback speeds, and a frame grid for seeking by click or drag.
+- Keeps up to ten recent folders, favourite videos, and up to thirty recently viewed videos across launches. Each recent-video entry can be removed without deleting its file.
 - Stores a title, YouTube link, Obsidian link, Markdown notes, and tags in JSON files keyed by the video's SHA-256 content hash. The metadata stays with the same file after it is moved.
 - Can save the current frame, copy the filename without its extension, reveal the file, open it in the system player, move it, or send it to the Windows Recycle Bin after confirmation.
 - Creates a two-times-speed copy with FFmpeg when `ffmpeg` is available on `PATH`.
@@ -37,7 +37,7 @@ To build the installer from source, use the instructions in the [technical docum
 1. Choose a folder or drop one into the window.
 2. Use the frame strips, filter, and sort controls to find a video.
 3. Open a video row. Adjust the number of frame-grid columns, the time interval, and automatic scrolling if needed.
-4. Click or drag across the grid to seek. The arrow keys, Home, End, and Space also control the player.
+4. Click or drag across the grid to seek. The arrow keys, Home, End, and Space also control the player; Space toggles play/pause.
 5. Add notes and tags in the metadata panel, then save them.
 
 ## Supported files and limits

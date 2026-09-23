@@ -98,6 +98,10 @@
   function updateRecentVideosButton() { recentVideosButton.querySelector("span").textContent = state.recentVideos.length; }
   function saveFavorites() { localStorage.setItem("folder-video-favorites", JSON.stringify(state.favorites)); }
   function saveRecentVideos() { localStorage.setItem("folder-video-recent-videos", JSON.stringify(state.recentVideos)); }
+  function removeRecentVideo(filePath) {
+    state.recentVideos = state.recentVideos.filter(function(video) { return video.path !== filePath; });
+    saveRecentVideos(); updateRecentVideosButton();
+  }
   function favoriteIndex(filePath) { return state.favorites.findIndex(function(video) { return video.path === filePath; }); }
   function isFavorite(filePath) { return favoriteIndex(filePath) !== -1; }
   function toggleFavorite(video) {
@@ -142,20 +146,25 @@
     closeFavorites(); closeRecentVideos(); state.recentVideosOpen = true;
     var overlay = document.createElement("div"); overlay.id = "recentVideosOverlay"; overlay.className = "favorites-overlay";
     var items = state.recentVideos.map(function(video) {
-      return "<li class=\"favorite-item\" data-path=\"" + escapeHtml(video.path) + "\"><button class=\"favorite-open\" data-path=\"" + escapeHtml(video.path) + "\" title=\"" + escapeHtml(video.name + "\n" + video.path) + "\"><span class=\"favorite-thumb\" aria-hidden=\"true\"><span class=\"favorite-thumb-placeholder\">▶</span></span><span class=\"favorite-copy\"><strong>" + escapeHtml(video.name) + "</strong><span>" + escapeHtml(video.path) + "</span></span></button></li>";
+      return "<li class=\"favorite-item\" data-path=\"" + escapeHtml(video.path) + "\"><button class=\"favorite-open\" data-path=\"" + escapeHtml(video.path) + "\" title=\"" + escapeHtml(video.name + "\n" + video.path) + "\" aria-label=\"Открыть видео: " + escapeHtml(video.name) + "\"><span class=\"favorite-thumb\" aria-hidden=\"true\"><span class=\"favorite-thumb-placeholder\">▶</span></span><span class=\"favorite-copy\"><strong>" + escapeHtml(video.name) + "</strong><span>" + escapeHtml(video.path) + "</span></span></button><button class=\"recent-video-remove\" data-path=\"" + escapeHtml(video.path) + "\" type=\"button\" title=\"Удалить из последних видео\" aria-label=\"Удалить из последних видео: " + escapeHtml(video.name) + "\">×</button></li>";
     }).join("");
     overlay.innerHTML = "<section class=\"favorites-panel\" role=\"dialog\" aria-modal=\"true\" aria-label=\"Последние просмотренные видео\"><header><strong>Последние видео</strong><span>" + state.recentVideos.length + "</span><button id=\"closeRecentVideos\" title=\"Закрыть список\" aria-label=\"Закрыть список\">×</button></header>" + (items ? "<ul>" + items + "</ul>" : "<p class=\"favorites-empty\">Пока нет просмотренных видео.</p>") + "</section>";
     overlay.addEventListener("click", function(event) { if (event.target === overlay) closeRecentVideos(); });
     document.body.appendChild(overlay);
     $("#closeRecentVideos").addEventListener("click", closeRecentVideos);
+    overlay.querySelectorAll(".recent-video-remove").forEach(function(button) {
+      button.addEventListener("click", function() {
+        removeRecentVideo(button.dataset.path);
+        renderRecentVideosPanel();
+      });
+    });
     overlay.querySelectorAll(".favorite-open").forEach(function(button) {
       button.addEventListener("click", async function() {
         var video = await window.folderVideo.readVideo(button.dataset.path);
         if (video) { closeRecentVideos(); openVideo(video); return; }
         var item = state.recentVideos.find(function(entry) { return entry.path === button.dataset.path; });
         if (item && window.confirm("Видео не найдено по сохранённому пути.\n\nНазвание: " + item.name + "\nПуть: " + item.path + "\n\nУдалить эту запись из списка?")) {
-          state.recentVideos = state.recentVideos.filter(function(entry) { return entry.path !== item.path; });
-          saveRecentVideos(); updateRecentVideosButton(); renderRecentVideosPanel();
+          removeRecentVideo(item.path); renderRecentVideosPanel();
         }
       });
     });
@@ -168,8 +177,7 @@
           return;
         }
         if (window.confirm("Видео не найдено по сохранённому пути.\n\nНазвание: " + recent.name + "\nПуть: " + recent.path + "\n\nУдалить эту запись из списка последних видео?")) {
-          state.recentVideos = state.recentVideos.filter(function(entry) { return entry.path !== recent.path; });
-          saveRecentVideos(); updateRecentVideosButton(); renderRecentVideosPanel();
+          removeRecentVideo(recent.path); renderRecentVideosPanel();
         }
       });
     });
@@ -1006,7 +1014,7 @@
     var prevDisabled = videoIndex <= 0;
     var nextDisabled = videoIndex === -1 || videoIndex >= playerVideoList().length - 1;
     var favorite = isFavorite(tab.video.path);
-    view.innerHTML = "<section class=\"player-view\"><div class=\"player-layout\"" + gs + "\"><div class=\"player-main\"><div class=\"video-bar\"><button id=\"back\" class=\"back\">◀ VIDEO LIST</button><span id=\"reveal\" class=\"video-path\" title=\"Открыть в Проводнике\">" + escapeHtml(tab.video.path) + "</span><button id=\"videoScreenshot\" class=\"video-action\" title=\"Сохранить скрин текущего кадра\" aria-label=\"Сохранить скрин текущего кадра\">SHOT</button><button id=\"copyVideoName\" class=\"video-action\" title=\"Скопировать название файла без расширения\" aria-label=\"Скопировать название файла без расширения\">COPY</button><button id=\"openExternal\" class=\"open-external\" title=\"Открыть в системном плеере\" aria-label=\"Открыть в системном плеере\">▶</button></div><div class=\"video-stage\"><video id=\"player\" controls playsinline src=\"" + tab.video.url + "\"></video><nav class=\"video-switcher\" aria-label=\"Переключение видео\"><button id=\"previousVideo\" type=\"button\" title=\"Предыдущее видео\" aria-label=\"Предыдущее видео\" " + (prevDisabled ? "disabled" : "") + ">‹ Prev</button><button id=\"nextVideo\" type=\"button\" title=\"Следующее видео\" aria-label=\"Следующее видео\" " + (nextDisabled ? "disabled" : "") + ">Next ›</button></nav></div></div><aside id=\"gridPanel\" class=\"grid-panel" + (tab.collapsed ? " collapsed" : "") + "\"><header class=\"grid-head\"><button id=\"collapse\" class=\"collapse\" title=\"Свернуть панель\">" + (tab.collapsed ? "◀" : "▶") + "</button><div class=\"grid-control\"><label>Col</label><select id=\"columns\">" + [3,4,5,6,8].map(function(v) { return "<option " + (v === tab.columns ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Sec</label><select id=\"seconds\">" + [5,10,15,30,60].map(function(v) { return "<option " + (v === tab.seconds ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Scroll</label><select id=\"scroll\"><option value=\"center\" " + (tab.scroll === "center" ? "selected" : "") + ">Center</option><option value=\"edge\" " + (tab.scroll === "edge" ? "selected" : "") + ">Edge</option><option value=\"off\" " + (tab.scroll === "off" ? "selected" : "") + ">OFF</option></select></div></header><div id=\"gridScroll\" class=\"grid-scroll\"><div id=\"frameGrid\" class=\"frame-grid\"></div></div></aside></div><footer class=\"player-status\">Space Play/Pause · Arrows Move marker · Click/Drag precise seek</footer></section>";
+    view.innerHTML = "<section class=\"player-view\"><div class=\"player-layout\"" + gs + "\"><div class=\"player-main\"><div class=\"video-bar\"><button id=\"back\" class=\"back\">◀ VIDEO LIST</button><span id=\"reveal\" class=\"video-path\" title=\"Открыть в Проводнике\">" + escapeHtml(tab.video.path) + "</span><button id=\"videoScreenshot\" class=\"video-action\" title=\"Сохранить скрин текущего кадра\" aria-label=\"Сохранить скрин текущего кадра\">SHOT</button><button id=\"copyVideoName\" class=\"video-action\" title=\"Скопировать название файла без расширения\" aria-label=\"Скопировать название файла без расширения\">COPY</button><button id=\"openExternal\" class=\"open-external\" title=\"Открыть в системном плеере\" aria-label=\"Открыть в системном плеере\">▶</button></div><div class=\"video-stage\"><video id=\"player\" controls playsinline src=\"" + tab.video.url + "\"></video><nav class=\"video-switcher\" aria-label=\"Управление воспроизведением и переключение видео\"><button id=\"previousVideo\" type=\"button\" title=\"Предыдущее видео\" aria-label=\"Предыдущее видео\" " + (prevDisabled ? "disabled" : "") + ">‹ Prev</button><button id=\"togglePlayback\" class=\"toggle-playback\" type=\"button\" title=\"Воспроизвести (Space)\" aria-label=\"Воспроизвести\" aria-pressed=\"false\"><span aria-hidden=\"true\">▶</span></button><button id=\"nextVideo\" type=\"button\" title=\"Следующее видео\" aria-label=\"Следующее видео\" " + (nextDisabled ? "disabled" : "") + ">Next ›</button></nav></div></div><aside id=\"gridPanel\" class=\"grid-panel" + (tab.collapsed ? " collapsed" : "") + "\"><header class=\"grid-head\"><button id=\"collapse\" class=\"collapse\" title=\"Свернуть панель\">" + (tab.collapsed ? "◀" : "▶") + "</button><div class=\"grid-control\"><label>Col</label><select id=\"columns\">" + [3,4,5,6,8].map(function(v) { return "<option " + (v === tab.columns ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Sec</label><select id=\"seconds\">" + [5,10,15,30,60].map(function(v) { return "<option " + (v === tab.seconds ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Scroll</label><select id=\"scroll\"><option value=\"center\" " + (tab.scroll === "center" ? "selected" : "") + ">Center</option><option value=\"edge\" " + (tab.scroll === "edge" ? "selected" : "") + ">Edge</option><option value=\"off\" " + (tab.scroll === "off" ? "selected" : "") + ">OFF</option></select></div></header><div id=\"gridScroll\" class=\"grid-scroll\"><div id=\"frameGrid\" class=\"frame-grid\"></div></div></aside></div><footer class=\"player-status\">Пробел — пуск/пауза · Стрелки — перемещение маркера · Клик/перетаскивание — точный переход</footer></section>";
     $("#gridPanel").outerHTML = sidePanelMarkup(tab);
     var favoriteButton = document.createElement("button");
     favoriteButton.id = "playerFavorite";
@@ -1073,6 +1081,19 @@
     $("#videoScreenshot").addEventListener("click", function() { takeVideoScreenshot(tab, player); });
     $("#copyVideoName").addEventListener("click", function() { copyVideoName(tab); });
     player.addEventListener("contextmenu", function(event) { event.preventDefault(); showCtxMenu(event, tab.video.path, tab, player); });
+    var togglePlayback = $("#togglePlayback");
+    function updatePlaybackButton() {
+      var playing = !player.paused && !player.ended;
+      togglePlayback.classList.toggle("is-playing", playing);
+      togglePlayback.setAttribute("aria-pressed", String(playing));
+      togglePlayback.title = (playing ? "Пауза" : "Воспроизвести") + " (Space)";
+      togglePlayback.setAttribute("aria-label", playing ? "Поставить на паузу" : "Воспроизвести");
+      togglePlayback.firstElementChild.textContent = playing ? "❚❚" : "▶";
+    }
+    togglePlayback.addEventListener("click", function() { player.paused ? player.play().catch(function() {}) : player.pause(); });
+    player.addEventListener("play", updatePlaybackButton);
+    player.addEventListener("pause", updatePlaybackButton);
+    player.addEventListener("ended", updatePlaybackButton);
     $("#previousVideo").addEventListener("click", function() { switchPlayerVideo(tab, -1); });
     $("#nextVideo").addEventListener("click", function() { switchPlayerVideo(tab, 1); });
     document.querySelectorAll(".playback-rate").forEach(function(button) {
