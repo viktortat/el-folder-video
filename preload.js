@@ -28,6 +28,14 @@ contextBridge.exposeInMainWorld('folderVideo', {
     ipcRenderer.on('folder-video:speed-up-progress', listener);
     return () => ipcRenderer.removeListener('folder-video:speed-up-progress', listener);
   },
+  loadTranscript: filePath => ipcRenderer.invoke('folder-video:transcript-load', filePath),
+  startTranscript: (filePath, operationId) => ipcRenderer.invoke('folder-video:transcript-start', filePath, operationId),
+  cancelTranscript: operationId => ipcRenderer.invoke('folder-video:transcript-cancel', operationId),
+  onTranscriptProgress: callback => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on('folder-video:transcript-progress', listener);
+    return () => ipcRenderer.removeListener('folder-video:transcript-progress', listener);
+  },
   getAppInfo: () => ipcRenderer.invoke('folder-video:get-app-info'),
   getSettings: () => ipcRenderer.invoke('folder-video:get-settings'),
   getDefaultSettings: () => ipcRenderer.invoke('folder-video:get-default-settings'),

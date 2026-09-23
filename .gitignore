@@ -1,3 +1,6 @@
 node_modules/
 out/
 .bun-tmp/
+scripts/__pycache__/
+tools/transcribe-cpp/transcribe-native.tar.gz
+

@@ -17,11 +17,12 @@
   const state = {
     folderPath: "", files: [], skipped: 0, recursive: false, hideEmptyFiles: false, recentDaysEnabled: localStorage.getItem("folder-video-recent-days-enabled") === "true", recentDays: normalizeRecentDays(localStorage.getItem("folder-video-recent-days")), filterText: "", sort: "date", asc: false, page: 1, pageSize: 10,
     tabs: [{ id: "folder", type: "folder", label: "Видео" }], activeTab: "folder",
-    stripCache: new Map(), stripPending: new Map(), frameCache: new Map(), durationCache: new Map(), captureVideos: new Map(), task: 0, thumbnailGeneration: 0, thumbnailPriority: 0,
+    stripCache: new Map(), stripPending: new Map(), frameCache: new Map(), favoriteThumbnailCache: new Map(), durationCache: new Map(), captureVideos: new Map(), task: 0, thumbnailGeneration: 0, thumbnailPriority: 0,
     recentFolders: JSON.parse(localStorage.getItem("folder-video-recent") || "[]"),
     pinnedFolders: JSON.parse(localStorage.getItem("folder-video-pinned") || "[]"),
-    favorites: JSON.parse(localStorage.getItem("folder-video-favorites") || "[]"), favoritesOpen: false,
-    speedUp: null,
+    favorites: JSON.parse(localStorage.getItem("folder-video-favorites") || "[]"), favoritesOpen: false, favoritesOnly: false,
+    recentVideos: JSON.parse(localStorage.getItem("folder-video-recent-videos") || "[]"), recentThumbnailCache: new Map(), recentVideosOpen: false,
+    speedUp: null, transcript: null,
     metadataCollapsed: false, gridCollapsed: false,
     settings: JSON.parse(JSON.stringify(DEFAULT_SETTINGS))
   };
@@ -31,6 +32,7 @@
   const toastEl = $("#toast");
   const themeToggle = $("#themeToggle");
   const favoritesButton = $("#favoritesButton");
+  const recentVideosButton = $("#recentVideosButton");
   const settingsButton = $("#settingsButton");
   const appVersion = $("#appVersion");
   let toastTimer;
@@ -93,7 +95,9 @@
     });
   }
   function updateFavoritesButton() { favoritesButton.querySelector("span").textContent = state.favorites.length; }
+  function updateRecentVideosButton() { recentVideosButton.querySelector("span").textContent = state.recentVideos.length; }
   function saveFavorites() { localStorage.setItem("folder-video-favorites", JSON.stringify(state.favorites)); }
+  function saveRecentVideos() { localStorage.setItem("folder-video-recent-videos", JSON.stringify(state.recentVideos)); }
   function favoriteIndex(filePath) { return state.favorites.findIndex(function(video) { return video.path === filePath; }); }
   function isFavorite(filePath) { return favoriteIndex(filePath) !== -1; }
   function toggleFavorite(video) {
@@ -107,12 +111,103 @@
     var overlay = $("#favoritesOverlay");
     if (overlay) overlay.remove();
   }
+  function rememberRecentVideo(video) {
+    state.recentVideos = state.recentVideos.filter(function(item) { return item.path !== video.path; });
+    state.recentVideos.unshift({ path: video.path, name: video.name });
+    if (state.recentVideos.length > 30) state.recentVideos.length = 30;
+    saveRecentVideos(); updateRecentVideosButton();
+  }
+  function closeRecentVideos() {
+    state.recentVideosOpen = false;
+    var overlay = $("#recentVideosOverlay");
+    if (overlay) overlay.remove();
+  }
+  async function hydrateRecentVideoThumbnail(item, video) {
+    var thumb = item.querySelector(".favorite-thumb");
+    if (!thumb || !item.isConnected) return;
+    var key = favoriteThumbnailKey(video);
+    var cached = state.recentThumbnailCache.get(key);
+    if (!cached) {
+      cached = await thumbnailQueue.enqueue(async function() {
+        return (await captureMiddleFrame(video.url)) || (await captureFrame(video.url, 1)) || (await captureFrame(video.url, 0));
+      }, 1);
+      if (cached) state.recentThumbnailCache.set(key, cached);
+    }
+    if (cached && item.isConnected) {
+      thumb.innerHTML = "<img src=\"" + escapeHtml(cached) + "\" alt=\"\" />";
+      thumb.classList.add("ready");
+    }
+  }
+  function renderRecentVideosPanel() {
+    closeFavorites(); closeRecentVideos(); state.recentVideosOpen = true;
+    var overlay = document.createElement("div"); overlay.id = "recentVideosOverlay"; overlay.className = "favorites-overlay";
+    var items = state.recentVideos.map(function(video) {
+      return "<li class=\"favorite-item\" data-path=\"" + escapeHtml(video.path) + "\"><button class=\"favorite-open\" data-path=\"" + escapeHtml(video.path) + "\" title=\"" + escapeHtml(video.name + "\n" + video.path) + "\"><span class=\"favorite-thumb\" aria-hidden=\"true\"><span class=\"favorite-thumb-placeholder\">▶</span></span><span class=\"favorite-copy\"><strong>" + escapeHtml(video.name) + "</strong><span>" + escapeHtml(video.path) + "</span></span></button></li>";
+    }).join("");
+    overlay.innerHTML = "<section class=\"favorites-panel\" role=\"dialog\" aria-modal=\"true\" aria-label=\"Последние просмотренные видео\"><header><strong>Последние видео</strong><span>" + state.recentVideos.length + "</span><button id=\"closeRecentVideos\" title=\"Закрыть список\" aria-label=\"Закрыть список\">×</button></header>" + (items ? "<ul>" + items + "</ul>" : "<p class=\"favorites-empty\">Пока нет просмотренных видео.</p>") + "</section>";
+    overlay.addEventListener("click", function(event) { if (event.target === overlay) closeRecentVideos(); });
+    document.body.appendChild(overlay);
+    $("#closeRecentVideos").addEventListener("click", closeRecentVideos);
+    overlay.querySelectorAll(".favorite-open").forEach(function(button) {
+      button.addEventListener("click", async function() {
+        var video = await window.folderVideo.readVideo(button.dataset.path);
+        if (video) { closeRecentVideos(); openVideo(video); return; }
+        var item = state.recentVideos.find(function(entry) { return entry.path === button.dataset.path; });
+        if (item && window.confirm("Видео не найдено по сохранённому пути.\n\nНазвание: " + item.name + "\nПуть: " + item.path + "\n\nУдалить эту запись из списка?")) {
+          state.recentVideos = state.recentVideos.filter(function(entry) { return entry.path !== item.path; });
+          saveRecentVideos(); updateRecentVideosButton(); renderRecentVideosPanel();
+        }
+      });
+    });
+    overlay.querySelectorAll(".favorite-item").forEach(function(item) {
+      var recent = state.recentVideos.find(function(entry) { return entry.path === item.dataset.path; });
+      if (!recent) return;
+      window.folderVideo.readVideo(recent.path).then(function(video) {
+        if (video) {
+          hydrateRecentVideoThumbnail(item, video);
+          return;
+        }
+        if (window.confirm("Видео не найдено по сохранённому пути.\n\nНазвание: " + recent.name + "\nПуть: " + recent.path + "\n\nУдалить эту запись из списка последних видео?")) {
+          state.recentVideos = state.recentVideos.filter(function(entry) { return entry.path !== recent.path; });
+          saveRecentVideos(); updateRecentVideosButton(); renderRecentVideosPanel();
+        }
+      });
+    });
+  }
+  function favoriteThumbnailKey(video) { return video.path + "|" + (video.size || 0) + "|" + (video.lastModified || 0); }
+  function removeMissingFavorite(filePath) {
+    var index = favoriteIndex(filePath);
+    if (index === -1) return;
+    state.favorites.splice(index, 1);
+    saveFavorites();
+    updateFavoritesButton();
+    renderActiveView();
+    renderFavoritesPanel();
+  }
+  async function hydrateFavoriteThumbnail(item, video) {
+    var thumb = item.querySelector(".favorite-thumb");
+    if (!thumb || !item.isConnected) return;
+    var key = favoriteThumbnailKey(video);
+    var cached = state.favoriteThumbnailCache.get(key);
+    if (!cached) {
+      // Не запрашиваем metadata отдельным video-элементом: для некоторых кодеков
+      // это возвращает 0 и преждевременно обрывает создание миниатюры.
+      cached = await thumbnailQueue.enqueue(async function() {
+        return (await captureMiddleFrame(video.url)) || (await captureFrame(video.url, 1)) || (await captureFrame(video.url, 0));
+      }, 1);
+      if (cached) state.favoriteThumbnailCache.set(key, cached);
+    }
+    if (cached && item.isConnected) {
+      thumb.innerHTML = "<img src=\"" + escapeHtml(cached) + "\" alt=\"\" />";
+      thumb.classList.add("ready");
+    }
+  }
   function renderFavoritesPanel() {
     closeFavorites(); state.favoritesOpen = true;
     var overlay = document.createElement("div");
     overlay.id = "favoritesOverlay"; overlay.className = "favorites-overlay";
     var items = state.favorites.map(function(video) {
-      return "<li class=\"favorite-item\"><button class=\"favorite-open\" data-path=\"" + escapeHtml(video.path) + "\" title=\"Открыть видео\"><strong>" + escapeHtml(video.name) + "</strong><span>" + escapeHtml(video.path) + "</span></button><button class=\"favorite-remove\" data-path=\"" + escapeHtml(video.path) + "\" title=\"Удалить из избранного\" aria-label=\"Удалить из избранного\">♥</button></li>";
+      return "<li class=\"favorite-item\" data-path=\"" + escapeHtml(video.path) + "\"><button class=\"favorite-open\" data-path=\"" + escapeHtml(video.path) + "\" title=\"" + escapeHtml(video.name + "\n" + video.path) + "\" aria-label=\"Открыть видео: " + escapeHtml(video.name) + "\"><span class=\"favorite-thumb\" aria-hidden=\"true\"><span class=\"favorite-thumb-placeholder\">▶</span></span><span class=\"favorite-copy\"><strong>" + escapeHtml(video.name) + "</strong><span>" + escapeHtml(video.path) + "</span></span></button><button class=\"favorite-remove\" data-path=\"" + escapeHtml(video.path) + "\" title=\"Удалить из избранного\" aria-label=\"Удалить из избранного\">♥</button></li>";
     }).join("");
     overlay.innerHTML = "<section class=\"favorites-panel\" role=\"dialog\" aria-modal=\"true\" aria-label=\"Избранные видео\"><header><strong>Избранное</strong><span>" + state.favorites.length + "</span><button id=\"closeFavorites\" title=\"Закрыть избранное\" aria-label=\"Закрыть избранное\">×</button></header>" + (items ? "<ul>" + items + "</ul>" : "<p class=\"favorites-empty\">Пока нет добавленных видео.</p>") + "</section>";
     overlay.addEventListener("click", function(event) { if (event.target === overlay) closeFavorites(); });
@@ -120,6 +215,16 @@
     $("#closeFavorites").addEventListener("click", closeFavorites);
     overlay.querySelectorAll(".favorite-remove").forEach(function(button) { button.addEventListener("click", function() { toggleFavorite({ path: button.dataset.path }); renderActiveView(); renderFavoritesPanel(); }); });
     overlay.querySelectorAll(".favorite-open").forEach(function(button) { button.addEventListener("click", function() { openFavorite(button.dataset.path); }); });
+    overlay.querySelectorAll(".favorite-item").forEach(function(item) {
+      var favorite = state.favorites.find(function(video) { return video.path === item.dataset.path; });
+      if (favorite) window.folderVideo.readVideo(favorite.path).then(function(video) {
+        if (video) {
+          hydrateFavoriteThumbnail(item, video);
+          return;
+        }
+        if (window.confirm("Видео не найдено по сохранённому пути.\n\nНазвание: " + favorite.name + "\nПуть: " + favorite.path + "\n\nУдалить эту запись из избранного?")) removeMissingFavorite(favorite.path);
+      });
+    });
   }
   async function openFavorite(filePath) {
     var video = await window.folderVideo.readVideo(filePath);
@@ -137,14 +242,21 @@
 
   themeToggle.addEventListener("click", function() { applyTheme(document.body.classList.contains("light") ? "dark" : "light", true); });
   favoritesButton.addEventListener("click", renderFavoritesPanel);
+  recentVideosButton.addEventListener("click", renderRecentVideosPanel);
   settingsButton.addEventListener("click", openSettings);
   const homeButton = $("#homeButton");
   homeButton.addEventListener("click", function() {
     state.activeTab = null;
     render();
   });
-  document.addEventListener("keydown", function(event) { if (event.key === "Escape") { if (state.favoritesOpen) closeFavorites(); closeCtxMenu(); } }); document.addEventListener("click", function() { closeCtxMenu(); });
-  applyTheme("dark", false); updateFavoritesButton();
+  window.folderVideo.onTranscriptProgress(function(progress) {
+    if (!state.transcript || progress.operationId !== state.transcript.operationId) return;
+    state.transcript.progress = progress.percent;
+    var tab = state.tabs.find(function(item) { return item.type === 'player' && item.video.path === state.transcript.filePath; });
+    if (tab) { tab.transcriptProgress = progress.percent; updateTranscriptControls(tab); }
+  });
+  document.addEventListener("keydown", function(event) { if (event.key === "Escape") { if (state.favoritesOpen) closeFavorites(); if (state.recentVideosOpen) closeRecentVideos(); closeCtxMenu(); } }); document.addEventListener("click", function() { closeCtxMenu(); });
+  applyTheme("dark", false); updateFavoritesButton(); updateRecentVideosButton();
   window.folderVideo.getSettings().then(function(result) {
     state.settings = result.settings;
     if (!result.hasConfig) {
@@ -192,7 +304,7 @@
     var query = state.filterText.toLowerCase();
     var earliestDate = Date.now() - state.recentDays * 86400000;
     return sortedFiles().filter(function(file) {
-      return (!state.hideEmptyFiles || file.size > 0) && (!state.recentDaysEnabled || file.lastModified >= earliestDate) && (!query || file.name.toLowerCase().includes(query));
+      return (!state.favoritesOnly || isFavorite(file.path)) && (!state.hideEmptyFiles || file.size > 0) && (!state.recentDaysEnabled || file.lastModified >= earliestDate) && (!query || file.name.toLowerCase().includes(query));
     });
   }
 
@@ -420,11 +532,12 @@
         "<button id=\"refreshFolder\" class=\"refresh-folder\" type=\"button\" title=\"Обновить список файлов\" aria-label=\"Обновить список файлов\"" + (state.folderPath ? "" : " disabled") + ">↻</button>" +
         "<div class=\"path-field\" title=\"" + escapeHtml(state.folderPath) + "\">" + (state.folderPath ? escapeHtml(state.folderPath) : "Выберите или перетащите папку с видео…") + "</div>" +
         "<input id=\"filter\" class=\"filter\" type=\"search\" value=\"" + escapeHtml(state.filterText) + "\" placeholder=\"Фильтр файлов\" title=\"Фильтр по имени файла\" aria-label=\"Фильтр по имени файла\" autocomplete=\"off\" />" +
+        "<button id=\"favoritesOnly\" class=\"favorites-filter" + (state.favoritesOnly ? " is-active" : "") + "\" type=\"button\" title=\"" + (state.favoritesOnly ? "Показать все видео этой папки" : "Показать только избранные видео этой папки") + "\" aria-label=\"" + (state.favoritesOnly ? "Показать все видео этой папки" : "Показать только избранные видео этой папки") + "\" aria-pressed=\"" + state.favoritesOnly + "\">" + (state.favoritesOnly ? "♥" : "♡") + "</button>" +
         "<label class=\"recent-days-filter\" title=\"Показывать видео, изменённые за указанное число дней\"><input id=\"recentDaysEnabled\" type=\"checkbox\" " + (state.recentDaysEnabled ? "checked" : "") + "/> За <input id=\"recentDays\" type=\"number\" min=\"1\" max=\"36500\" step=\"1\" value=\"" + state.recentDays + "\" inputmode=\"numeric\" aria-label=\"Количество дней для фильтра\" /> дней</label>" +
         "<div class=\"scan-options\"><label class=\"check\"><input id=\"recursive\" type=\"checkbox\" " + (state.recursive ? "checked" : "") + "/> Recursive</label>" +
         "<label class=\"check\" title=\"Скрыть видеофайлы с размером 0 КБ\"><input id=\"hideEmptyFiles\" type=\"checkbox\" " + (state.hideEmptyFiles ? "checked" : "") + "/> Не 0 КБ</label></div>" +
         "<div class=\"sort\"><span>Sort</span><select id=\"sort\"><option value=\"date\" " + (state.sort === "date" ? "selected" : "") + ">Date</option><option value=\"name\" " + (state.sort === "name" ? "selected" : "") + ">Name</option></select><button id=\"direction\" title=\"Изменить направление\">" + (state.asc ? "▲" : "▼") + "</button></div>" +
-        "<span class=\"count\">" + files.length + (state.filterText || state.hideEmptyFiles || state.recentDaysEnabled ? " / " + state.files.length : "") + " videos</span>" +
+        "<span class=\"count\">" + files.length + (state.filterText || state.favoritesOnly || state.hideEmptyFiles || state.recentDaysEnabled ? " / " + state.files.length : "") + " videos</span>" +
       "</header>" +
       "<div id=\"folderContent\" class=\"folder-content\">" + (rows.length ? rows.map(function(v) { return rowMarkup(v); }).join("") + pagination(pages) : emptyMarkup()) + "</div>" +
     "</section>";
@@ -441,6 +554,7 @@
     });
     $("#recursive").addEventListener("change", function(event) { state.recursive = event.target.checked; scanCurrentFolder(); });
     $("#hideEmptyFiles").addEventListener("change", function(event) { state.hideEmptyFiles = event.target.checked; state.page = 1; renderFolder(); });
+    $("#favoritesOnly").addEventListener("click", function() { state.favoritesOnly = !state.favoritesOnly; state.page = 1; renderFolder(); });
     $("#recentDaysEnabled").addEventListener("change", function(event) {
       state.recentDaysEnabled = event.target.checked; localStorage.setItem("folder-video-recent-days-enabled", String(state.recentDaysEnabled)); state.page = 1; renderFolder();
     });
@@ -480,7 +594,7 @@
 
   function emptyMarkup() {
     if (!state.folderPath) return visibleRecentFolders().length ? recentFoldersMarkup() : emptyHomeMarkup();
-    var message = state.filterText || state.hideEmptyFiles || state.recentDaysEnabled ? "По фильтру ничего не найдено" : "Видео не найдены";
+    var message = state.filterText || state.favoritesOnly || state.hideEmptyFiles || state.recentDaysEnabled ? "По фильтру ничего не найдено" : "Видео не найдены";
     return "<div class=\"empty\"><div class=\"empty-inner\"><div class=\"empty-icon\"><img src=\"assets/folder-video.png\" alt=\"\" /></div><strong>" + message + "</strong><small>Измените фильтр или выберите другую папку<br>" + supported + "</small></div></div>";
   }
   function rowMarkup(video) {
@@ -711,9 +825,10 @@
     }
   }
   function setPlayerVideo(tab, video) {
+    if (state.transcript && state.transcript.filePath === tab.video.path) window.folderVideo.cancelTranscript(state.transcript.operationId);
     releasePlayerResources(tab.video.url);
     if (tab.metadataRequestId) window.folderVideo.cancelMetadata(tab.metadataRequestId);
-    tab.video = video; tab.label = video.name; tab.currentTime = 0; tab.isDragging = false;
+    tab.video = video; tab.label = video.name; tab.currentTime = 0; tab.isDragging = false; tab.panelMode = "frames"; tab.transcriptStatus = null; tab.transcriptSegments = []; tab.transcriptError = ""; tab.transcriptProgress = 0;
     tab.metadataStatus = "idle"; tab.metadata = null; tab.metadataDraft = null; tab.metadataDirty = false; tab.metadataRequestId = null; tab.markdownMode = "edit";
   }
   function switchPlayerVideo(tab, direction) {
@@ -723,12 +838,13 @@
     render();
   }
   function openVideo(video) {
+    rememberRecentVideo(video);
     for (var ti = 0; ti < state.tabs.length; ti++) {
       if (state.tabs[ti].type === "player" && state.tabs[ti].video.path === video.path) {
         state.activeTab = state.tabs[ti].id; render(); return;
       }
     }
-    var tab = { id: "player-" + Date.now() + "-" + Math.random().toString(16).slice(2), type: "player", label: video.name, video: video, columns: state.settings.viewer.columns, seconds: state.settings.viewer.seconds, scroll: state.settings.viewer.scroll, collapsed: state.gridCollapsed, metadataCollapsed: state.metadataCollapsed, currentTime: 0, metadataStatus: "idle", metadata: null, metadataDraft: null, metadataDirty: false, markdownMode: "edit" };
+    var tab = { id: "player-" + Date.now() + "-" + Math.random().toString(16).slice(2), type: "player", label: video.name, video: video, columns: state.settings.viewer.columns, seconds: state.settings.viewer.seconds, scroll: state.settings.viewer.scroll, collapsed: state.gridCollapsed, metadataCollapsed: state.metadataCollapsed, panelMode: "frames", transcriptStatus: null, transcriptSegments: [], transcriptError: "", transcriptProgress: 0, currentTime: 0, metadataStatus: "idle", metadata: null, metadataDraft: null, metadataDirty: false, markdownMode: "edit" };
     state.tabs.push(tab); state.activeTab = tab.id; render();
   }
   async function closeTab(id) {
@@ -744,7 +860,7 @@
       if (choice === "save") { await saveSettingsTab(tab); if (tab.dirty) return; }
     }
     if (tab.metadataRequestId) window.folderVideo.cancelMetadata(tab.metadataRequestId);
-    if (tab.type === "player") releasePlayerResources(tab.video.url);
+    if (tab.type === "player") { if (state.transcript && state.transcript.filePath === tab.video.path) window.folderVideo.cancelTranscript(state.transcript.operationId); releasePlayerResources(tab.video.url); }
     state.tabs.splice(idx, 1);
     if (state.activeTab === id) {
       state.activeTab = state.tabs.length
@@ -808,6 +924,82 @@
     return template.innerHTML;
   }
   async function renderMarkdownPreview(tab) { var preview = $("#metadataPreview"); if (!preview) return; var html = await window.folderVideo.renderMarkdown(tab.metadataDraft.descriptionMarkdown); if (preview.isConnected && active() === tab && tab.markdownMode === "preview") preview.innerHTML = sanitizeMarkdown(html); }
+  function parseSrtTime(value) {
+    var match = /^(\d{2}):(\d{2}):(\d{2})[,.](\d{3})$/.exec(value.trim());
+    return match ? Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) + Number(match[4]) / 1000 : null;
+  }
+  function parseSrt(source) {
+    return source.replace(/^\uFEFF/, "").replace(/\r/g, "").trim().split(/\n{2,}/).map(function(block) {
+      var lines = block.split("\n"); var timeLine = lines.findIndex(function(line) { return line.includes("-->"); });
+      if (timeLine === -1) return null;
+      var range = lines[timeLine].split("-->"); var start = parseSrtTime(range[0]); var end = parseSrtTime(range[1]);
+      if (start === null || end === null) return null;
+      return { start: start, end: end, text: lines.slice(timeLine + 1).join(" ").trim() };
+    }).filter(Boolean);
+  }
+  function transcriptButtonMarkup(tab) {
+    var running = state.transcript && state.transcript.filePath === tab.video.path;
+    if (running) return { icon: "×", title: "Отменить транскрибацию: " + Math.round(tab.transcriptProgress || 0) + "%", className: " is-running" };
+    return { icon: "☷", title: tab.transcriptSegments && tab.transcriptSegments.length ? "Перетранскрибировать" : "Транскрибировать видео", className: "" };
+  }
+  function sidePanelMarkup(tab) {
+    var action = transcriptButtonMarkup(tab);
+    return "<aside id=\"gridPanel\" class=\"grid-panel" + (tab.collapsed ? " collapsed" : "") + "\"><header class=\"grid-head\"><button id=\"collapse\" class=\"collapse\" title=\"" + (tab.collapsed ? "Развернуть панель" : "Свернуть панель") + "\" aria-label=\"Показать или скрыть боковую панель\">" + (tab.collapsed ? "◀" : "▶") + "</button><div class=\"panel-modes\"><button data-panel-mode=\"frames\" class=\"" + ((tab.panelMode || "frames") === "frames" ? "active" : "") + "\" title=\"Показать миниатюры\" aria-label=\"Показать миниатюры\">▦</button><button data-panel-mode=\"transcript\" class=\"" + ((tab.panelMode || "frames") === "transcript" ? "active" : "") + "\" title=\"Показать транскрипцию\" aria-label=\"Показать транскрипцию\">≡</button></div><button id=\"transcriptAction\" class=\"transcript-action" + action.className + "\" title=\"" + action.title + "\" aria-label=\"" + action.title + "\">" + action.icon + "</button><div id=\"frameControls\" class=\"frame-controls" + ((tab.panelMode || "frames") === "frames" ? "" : " is-hidden") + "\"><div class=\"grid-control\"><label>Col</label><select id=\"columns\">" + [3,4,5,6,8].map(function(v) { return "<option " + (v === tab.columns ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Sec</label><select id=\"seconds\">" + [5,10,15,30,60].map(function(v) { return "<option " + (v === tab.seconds ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Scroll</label><select id=\"scroll\"><option value=\"center\" " + (tab.scroll === "center" ? "selected" : "") + ">Center</option><option value=\"edge\" " + (tab.scroll === "edge" ? "selected" : "") + ">Edge</option><option value=\"off\" " + (tab.scroll === "off" ? "selected" : "") + ">OFF</option></select></div></div></header><div id=\"gridScroll\" class=\"grid-scroll" + ((tab.panelMode || "frames") === "frames" ? "" : " is-hidden") + "\"><div id=\"frameGrid\" class=\"frame-grid\"></div></div><div id=\"transcriptScroll\" class=\"transcript-scroll" + ((tab.panelMode || "frames") === "transcript" ? "" : " is-hidden") + "\"></div></aside>";
+  }
+  function renderTranscriptPanel(tab, player) {
+    var host = $("#transcriptScroll"); if (!host || active() !== tab) return;
+    if (tab.transcriptStatus === "loading") { host.innerHTML = "<p class=\"transcript-empty\">Открываем сохранённую транскрипцию…</p>"; return; }
+    if (tab.transcriptStatus === "running") { host.innerHTML = "<p class=\"transcript-empty is-running\">Транскрибация выполняется…<strong>" + Math.round(tab.transcriptProgress || 0) + "%</strong></p>"; return; }
+    if (tab.transcriptError) { host.innerHTML = "<p class=\"transcript-empty is-error\">" + escapeHtml(tab.transcriptError) + "</p>"; return; }
+    if (!tab.transcriptSegments || !tab.transcriptSegments.length) { host.innerHTML = "<p class=\"transcript-empty\">Транскрипции пока нет.<br>Нажмите кнопку ☷ в шапке панели.</p>"; return; }
+    host.innerHTML = tab.transcriptSegments.map(function(segment, index) { return "<button class=\"transcript-segment\" data-index=\"" + index + "\" data-start=\"" + segment.start + "\" data-end=\"" + segment.end + "\"><time>" + formatTime(segment.start) + "</time><span>" + escapeHtml(segment.text) + "</span></button>"; }).join("");
+    host.querySelectorAll(".transcript-segment").forEach(function(button) { button.addEventListener("click", function() { player.currentTime = Number(button.dataset.start); tab.currentTime = player.currentTime; player.play().catch(function() {}); updateActiveTranscript(player.currentTime, tab, true); }); });
+    updateActiveTranscript(player.currentTime, tab, false);
+  }
+  async function loadPlayerTranscript(tab) {
+    var filePath = tab.video.path;
+    tab.transcriptStatus = "loading"; tab.transcriptError = ""; renderTranscriptPanel(tab, $("#player"));
+    var result = await window.folderVideo.loadTranscript(filePath);
+    if (active() !== tab || tab.video.path !== filePath) return;
+    if (result.error) { tab.transcriptError = result.error; tab.transcriptStatus = "error"; }
+    else { tab.transcriptSegments = result.available ? parseSrt(result.srt) : []; tab.transcriptStatus = "ready"; tab.transcriptStale = Boolean(result.stale); }
+    renderTranscriptPanel(tab, $("#player")); updateTranscriptControls(tab);
+  }
+  function updateTranscriptControls(tab) {
+    var button = $("#transcriptAction"); if (!button || active() !== tab) return;
+    var action = transcriptButtonMarkup(tab); button.className = "transcript-action" + action.className; button.textContent = action.icon; button.title = action.title; button.setAttribute("aria-label", action.title);
+    var playerButton = $("#playerTranscript");
+    if (playerButton) { var playerTitle = tab.transcriptSegments && tab.transcriptSegments.length ? "Открыть транскрипцию" : "Транскрибировать видео"; playerButton.title = playerTitle; playerButton.setAttribute("aria-label", playerTitle); }
+    renderTranscriptPanel(tab, $("#player"));
+  }
+  async function startPlayerTranscript(tab) {
+    if (state.transcript && state.transcript.filePath === tab.video.path) { await window.folderVideo.cancelTranscript(state.transcript.operationId); return; }
+    if (state.transcript) { notice("Сначала дождитесь завершения другой транскрибации."); return; }
+    var operationId = "transcript-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+    var filePath = tab.video.path;
+    state.transcript = { operationId: operationId, filePath: filePath, progress: 0 }; tab.transcriptStatus = "running"; tab.transcriptProgress = 0; tab.panelMode = "transcript"; setPlayerPanelMode(tab, $("#player")); updateTranscriptControls(tab);
+    var result = await window.folderVideo.startTranscript(filePath, operationId);
+    if (!state.transcript || state.transcript.operationId !== operationId) return;
+    state.transcript = null;
+    if (tab.video.path !== filePath) return;
+    if (result.canceled) { tab.transcriptStatus = "ready"; updateTranscriptControls(tab); return; }
+    if (result.error) { tab.transcriptStatus = "error"; tab.transcriptError = result.error; updateTranscriptControls(tab); return; }
+    tab.transcriptSegments = parseSrt(result.srt || ""); tab.transcriptStatus = "ready"; tab.transcriptStale = false; updateTranscriptControls(tab); notice("Транскрипция готова", true);
+  }
+  function updateActiveTranscript(time, tab, shouldScroll) {
+    if ((tab.panelMode || "frames") !== "transcript" || !tab.transcriptSegments) return;
+    var index = tab.transcriptSegments.findIndex(function(segment) { return time >= segment.start && time < segment.end; });
+    var host = $("#transcriptScroll"); if (!host) return;
+    var next = index >= 0 ? host.querySelector(".transcript-segment[data-index=\"" + index + "\"]") : null;
+    var previous = host.querySelector(".transcript-segment.active");
+    if (previous !== next) { if (previous) previous.classList.remove("active"); if (next) { next.classList.add("active"); if (shouldScroll) next.scrollIntoView({ block: "nearest" }); } }
+  }
+  function setPlayerPanelMode(tab, player) {
+    var mode = tab.panelMode || "frames"; var frames = $("#gridScroll"); var transcript = $("#transcriptScroll"); var controls = $("#frameControls");
+    if (frames) frames.classList.toggle("is-hidden", mode !== "frames"); if (transcript) transcript.classList.toggle("is-hidden", mode !== "transcript"); if (controls) controls.classList.toggle("is-hidden", mode !== "frames");
+    document.querySelectorAll("[data-panel-mode]").forEach(function(button) { button.classList.toggle("active", button.dataset.panelMode === mode); });
+    if (mode === "transcript") renderTranscriptPanel(tab, player); else if (player && Number.isFinite(player.duration) && !$("#frameGrid").children.length) renderFrameGrid(tab, player);
+  }
   function renderPlayer(tab) { var gs = "";
     var playbackRate = tab.playbackRate || 1;
     var videoIndex = playerVideoIndex(tab);
@@ -815,6 +1007,7 @@
     var nextDisabled = videoIndex === -1 || videoIndex >= playerVideoList().length - 1;
     var favorite = isFavorite(tab.video.path);
     view.innerHTML = "<section class=\"player-view\"><div class=\"player-layout\"" + gs + "\"><div class=\"player-main\"><div class=\"video-bar\"><button id=\"back\" class=\"back\">◀ VIDEO LIST</button><span id=\"reveal\" class=\"video-path\" title=\"Открыть в Проводнике\">" + escapeHtml(tab.video.path) + "</span><button id=\"videoScreenshot\" class=\"video-action\" title=\"Сохранить скрин текущего кадра\" aria-label=\"Сохранить скрин текущего кадра\">SHOT</button><button id=\"copyVideoName\" class=\"video-action\" title=\"Скопировать название файла без расширения\" aria-label=\"Скопировать название файла без расширения\">COPY</button><button id=\"openExternal\" class=\"open-external\" title=\"Открыть в системном плеере\" aria-label=\"Открыть в системном плеере\">▶</button></div><div class=\"video-stage\"><video id=\"player\" controls playsinline src=\"" + tab.video.url + "\"></video><nav class=\"video-switcher\" aria-label=\"Переключение видео\"><button id=\"previousVideo\" type=\"button\" title=\"Предыдущее видео\" aria-label=\"Предыдущее видео\" " + (prevDisabled ? "disabled" : "") + ">‹ Prev</button><button id=\"nextVideo\" type=\"button\" title=\"Следующее видео\" aria-label=\"Следующее видео\" " + (nextDisabled ? "disabled" : "") + ">Next ›</button></nav></div></div><aside id=\"gridPanel\" class=\"grid-panel" + (tab.collapsed ? " collapsed" : "") + "\"><header class=\"grid-head\"><button id=\"collapse\" class=\"collapse\" title=\"Свернуть панель\">" + (tab.collapsed ? "◀" : "▶") + "</button><div class=\"grid-control\"><label>Col</label><select id=\"columns\">" + [3,4,5,6,8].map(function(v) { return "<option " + (v === tab.columns ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Sec</label><select id=\"seconds\">" + [5,10,15,30,60].map(function(v) { return "<option " + (v === tab.seconds ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Scroll</label><select id=\"scroll\"><option value=\"center\" " + (tab.scroll === "center" ? "selected" : "") + ">Center</option><option value=\"edge\" " + (tab.scroll === "edge" ? "selected" : "") + ">Edge</option><option value=\"off\" " + (tab.scroll === "off" ? "selected" : "") + ">OFF</option></select></div></header><div id=\"gridScroll\" class=\"grid-scroll\"><div id=\"frameGrid\" class=\"frame-grid\"></div></div></aside></div><footer class=\"player-status\">Space Play/Pause · Arrows Move marker · Click/Drag precise seek</footer></section>";
+    $("#gridPanel").outerHTML = sidePanelMarkup(tab);
     var favoriteButton = document.createElement("button");
     favoriteButton.id = "playerFavorite";
     favoriteButton.className = "favorite-toggle" + (favorite ? " is-favorite" : "");
@@ -847,6 +1040,13 @@
     if (speedingUp) speedButton.style.setProperty("--speed-progress", speedJob.progress + "%");
     speedButton.innerHTML = speedUpButtonMarkup(speedingUp, speedingUp ? speedJob.progress : 0);
     $("#playerDelete").before(speedButton);
+    var transcriptButton = document.createElement("button");
+    transcriptButton.id = "playerTranscript";
+    transcriptButton.className = "player-transcript";
+    transcriptButton.title = "Транскрибировать видео";
+    transcriptButton.setAttribute("aria-label", transcriptButton.title);
+    transcriptButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14M5 10h14M5 15h9M5 20h12"/></svg>';
+    $("#playerDelete").before(transcriptButton);
     var layout = $(".player-layout"); layout.insertAdjacentHTML("afterbegin", metadataPanelMarkup(tab)); layout.classList.toggle("metadata-collapsed", tab.metadataCollapsed); layout.classList.toggle("grid-collapsed", tab.collapsed);
     var player = $("#player"); player.currentTime = tab.currentTime || 0; player.playbackRate = playbackRate;
     var playbackRates = document.createElement("span");
@@ -868,6 +1068,7 @@
     $("#playerFavorite").addEventListener("click", function() { toggleFavorite(tab.video); renderPlayer(tab); });
     $("#playerMove").addEventListener("click", function() { moveFile(tab.video.path); });
     $("#playerSpeed").addEventListener("click", function() { startSpeedUp(tab, player); });
+    $("#playerTranscript").addEventListener("click", function() { tab.panelMode = "transcript"; setPlayerPanelMode(tab, player); if (!tab.transcriptSegments || !tab.transcriptSegments.length) startPlayerTranscript(tab); });
     $("#playerDelete").addEventListener("click", function() { deleteFile(tab.video.path); });
     $("#videoScreenshot").addEventListener("click", function() { takeVideoScreenshot(tab, player); });
     $("#copyVideoName").addEventListener("click", function() { copyVideoName(tab); });
@@ -887,6 +1088,8 @@
     });
     $("#metadataCollapse").addEventListener("click", function() { tab.metadataCollapsed = !tab.metadataCollapsed; state.metadataCollapsed = tab.metadataCollapsed; savePanelPreferences(); renderPlayer(tab); });
     $("#collapse").addEventListener("click", function() { tab.collapsed = !tab.collapsed; state.gridCollapsed = tab.collapsed; savePanelPreferences(); renderPlayer(tab); });
+    document.querySelectorAll("[data-panel-mode]").forEach(function(button) { button.addEventListener("click", function() { tab.panelMode = button.dataset.panelMode; setPlayerPanelMode(tab, player); }); });
+    $("#transcriptAction").addEventListener("click", function() { startPlayerTranscript(tab); });
     $("#columns").addEventListener("change", function(event) {
       tab.columns = Number(event.target.value);
       var grid = $("#frameGrid");
@@ -899,12 +1102,13 @@
     });
     $("#scroll").addEventListener("change", function(event) { tab.scroll = event.target.value; });
     renderMetadataContent(tab); if (!tab.metadata && tab.metadataStatus === "idle") loadMetadata(tab);
+    if (!tab.transcriptStatus) loadPlayerTranscript(tab); else renderTranscriptPanel(tab, player);
     player.addEventListener("loadedmetadata", function() {
       if (!Number.isFinite(player.duration) || !player.duration) { notice("Этот файл не удаётся декодировать в Chromium."); return; }
       renderFrameGrid(tab, player);
     });
-    player.addEventListener("timeupdate", function() { tab.currentTime = player.currentTime; updateActiveFrame(player.currentTime, tab, !tab.isDragging); });
-    player.addEventListener("seeked", function() { tab.currentTime = player.currentTime; updateActiveFrame(player.currentTime, tab, !tab.isDragging); });
+    player.addEventListener("timeupdate", function() { tab.currentTime = player.currentTime; updateActiveFrame(player.currentTime, tab, !tab.isDragging); updateActiveTranscript(player.currentTime, tab, true); });
+    player.addEventListener("seeked", function() { tab.currentTime = player.currentTime; updateActiveFrame(player.currentTime, tab, !tab.isDragging); updateActiveTranscript(player.currentTime, tab, true); });
     document.onkeydown = function(event) { keyboardPlayer(event, tab, player); };
   }
   function keyboardPlayer(event, tab, player) {
@@ -1106,11 +1310,29 @@
   function captureFrame(url, time) {
     return captureFrameTimes(url, [time]).then(function(frames) { return frames[0] || null; });
   }
+  async function captureMiddleFrame(url) {
+    var video = document.createElement("video");
+    var captureVideos = state.captureVideos.get(url);
+    if (!captureVideos) { captureVideos = new Set(); state.captureVideos.set(url, captureVideos); }
+    captureVideos.add(video);
+    var canvas = document.createElement("canvas");
+    try {
+      if (!await loadCaptureVideo(video, url) || !Number.isFinite(video.duration) || video.duration <= 0) return null;
+      return await captureFrameFromVideo(video, canvas, Math.max(0, video.duration / 2));
+    } finally {
+      captureVideos.delete(video);
+      if (!captureVideos.size) state.captureVideos.delete(url);
+      releaseVideoElement(video);
+      video.remove();
+    }
+  }
   function loadCaptureVideo(video, url) { return new Promise(function(resolve) {
     var done = false; var timeout = setTimeout(function() { finish(false); }, 9000);
-    function finish(ok) { if (done) return; done = true; clearTimeout(timeout); video.onloadeddata = null; video.onerror = null; resolve(ok); }
+    function finish(ok) { if (done) return; done = true; clearTimeout(timeout); video.onloadedmetadata = null; video.onloadeddata = null; video.onerror = null; resolve(ok); }
     video.muted = true; video.preload = "auto";
-    video.onloadeddata = function() { finish(true); };
+    // Metadata достаточно, чтобы выставить currentTime; сам кадр дожидаемся
+    // в captureFrameFromVideo перед drawImage().
+    video.onloadedmetadata = function() { finish(true); };
     video.onerror = function() { finish(false); };
     video.src = url; video.load();
   }); }
@@ -1120,6 +1342,10 @@
     var timeout = setTimeout(function() { finish(null); }, 9000);
     function finish(value) { if (done) return; done = true; clearTimeout(timeout); video.onseeked = null; video.onerror = null; resolve(value); }
     function draw() {
+      if (video.readyState < 2) {
+        video.onloadeddata = draw;
+        return;
+      }
       try {
         canvas.width = 160; canvas.height = 90;
         canvas.getContext("2d").drawImage(video, 0, 0, 160, 90);
@@ -1128,6 +1354,7 @@
     }
     var target = Math.max(0, Math.min(time, Math.max(0, video.duration - 0.1)));
     video.onseeked = draw;
+    video.onloadeddata = draw;
     video.onerror = function() { finish(null); };
     if (Math.abs(video.currentTime - target) < 0.02 && video.readyState >= 2) draw();
     else video.currentTime = target;

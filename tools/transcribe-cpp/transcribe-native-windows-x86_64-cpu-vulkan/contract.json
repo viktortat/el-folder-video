@@ -1,0 +1,6 @@
+{
+  "version": "0.2.3",
+  "header_hash": "7df72bf9e667b8c2",
+  "backends": ["vulkan", "cpu"],
+  "lane": "cpu-vulkan"
+}

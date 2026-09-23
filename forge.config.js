@@ -1,5 +1,14 @@
 module.exports = {
-  packagerConfig: { asar: true, executableName: 'folder-video', icon: './assets/folder-video.ico', ignore: /thumbnail-queue\.test\.js$/ },
+  packagerConfig: {
+    asar: true,
+    executableName: 'folder-video',
+    icon: './assets/folder-video.ico',
+    ignore: /thumbnail-queue\.test\.js$/,
+    extraResource: [
+      'scripts/transcribe_handy.py',
+      'tools/transcribe-cpp/transcribe-native-windows-x86_64-cpu-vulkan'
+    ]
+  },
   rebuildConfig: {},
   makers: [
     { name: '@electron-forge/maker-squirrel', config: { name: 'folder_video', setupExe: 'folder-video-setup.exe', setupIcon: './assets/folder-video.ico', iconUrl: 'https://raw.githubusercontent.com/viktortat/karpaty-db-electron/main/demo-vik2/assets/folder-video.ico' } },

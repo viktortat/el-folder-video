@@ -2,6 +2,7 @@
 const { readdir, lstat, rename, copyFile, unlink, readFile, writeFile, mkdir, rm } = require('node:fs/promises');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { VideoMetadataStore } = require('./video-metadata-store');
 const { hashFile } = require('./hash-file');
@@ -25,6 +26,7 @@ const DEFAULT_METADATA_TEMPLATE = `<form id="metadataForm">
 </form>`;
 let metadataStore;
 const metadataJobs = new Map();
+const transcriptJobs = new Map();
 let pendingLaunchTarget = null;
 let isRendererReady = false;
 let appSettings;
@@ -184,6 +186,94 @@ function isObsidianUrl(value) { return !value || value.startsWith('obsidian://')
 function outputPathForSpeedUp(filePath) {
   const parsed = path.parse(filePath);
   return path.join(parsed.dir, `${parsed.name}_2x${parsed.ext}`);
+}
+
+function transcriptDirectory() { return path.join(app.getPath('userData'), 'transcripts'); }
+function transcriptKey(filePath) { return createHash('sha256').update(filePath).digest('hex').slice(0, 12); }
+function transcriptStem(filePath) {
+  const parsed = path.parse(filePath);
+  const safeName = parsed.name.replace(/[<>:"/\\|?*]/g, '_').slice(0, 120) || 'video';
+  return `${safeName}__${transcriptKey(filePath)}`;
+}
+function transcriptPaths(filePath) {
+  const stem = transcriptStem(filePath);
+  const directory = transcriptDirectory();
+  return { directory, stem, srtPath: path.join(directory, `${stem}.srt`), manifestPath: path.join(directory, `${stem}.json`) };
+}
+function sourceSignature(filePath, stat) { return { filePath, size: stat.size, mtimeMs: stat.mtimeMs }; }
+function isSameSource(manifest, signature) {
+  return manifest && manifest.filePath === signature.filePath && manifest.size === signature.size && manifest.mtimeMs === signature.mtimeMs;
+}
+async function loadTranscript(filePath) {
+  if (typeof filePath !== 'string' || !VIDEO_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return { error: 'Некорректный путь к видео' };
+  let stat;
+  try { stat = await lstat(filePath); if (!stat.isFile()) return { error: 'Указанный путь не является файлом' }; }
+  catch (error) { return { error: error.message || 'Не удалось прочитать видео' }; }
+  const paths = transcriptPaths(filePath);
+  try {
+    const manifest = JSON.parse(await readFile(paths.manifestPath, 'utf8'));
+    if (!isSameSource(manifest, sourceSignature(filePath, stat))) return { stale: true };
+    const srt = await readFile(paths.srtPath, 'utf8');
+    return { available: true, srt, srtPath: paths.srtPath };
+  } catch (error) {
+    return error.code === 'ENOENT' ? { available: false } : { error: `Не удалось открыть транскрипцию: ${error.message}` };
+  }
+}
+function transcriptionRuntime() {
+  if (app.isPackaged) {
+    const nativeRoot = path.join(process.resourcesPath, 'transcribe-native-windows-x86_64-cpu-vulkan');
+    return { script: path.join(process.resourcesPath, 'transcribe_handy.py'), dll: path.join(nativeRoot, 'transcribe.dll') };
+  }
+  const nativeRoot = path.join(__dirname, 'tools', 'transcribe-cpp', 'transcribe-native-windows-x86_64-cpu-vulkan');
+  return { script: path.join(__dirname, 'scripts', 'transcribe_handy.py'), dll: path.join(nativeRoot, 'transcribe.dll') };
+}
+function cancelTranscriptJob(job) {
+  job.canceled = true;
+  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(job.child.pid), '/T', '/F'], { windowsHide: true });
+  else job.child.kill('SIGTERM');
+}
+async function runTranscript(event, filePath, operationId) {
+  if (process.platform !== 'win32') return { error: 'Транскрибация через Handy сейчас поддерживается только в Windows.' };
+  const current = await loadTranscript(filePath);
+  if (current.error) return current;
+  if (!current.stale && current.available) return { success: true, reused: true, ...current };
+  let sourceStat;
+  try { sourceStat = await lstat(filePath); } catch (error) { return { error: error.message || 'Не удалось прочитать видео' }; }
+  const runtime = transcriptionRuntime();
+  try { await Promise.all([lstat(runtime.script), lstat(runtime.dll)]); }
+  catch { return { error: 'Не найдено окружение транскрибации. Переустановите приложение.' }; }
+  const paths = transcriptPaths(filePath);
+  await mkdir(paths.directory, { recursive: true });
+  return new Promise(resolve => {
+    const child = spawn('python', [runtime.script, filePath, '--output-dir', paths.directory, '--output-stem', paths.stem, '--dll', runtime.dll], { windowsHide: true, env: { ...process.env, PYTHONUTF8: '1' } });
+    const job = { operationId, filePath, child, canceled: false };
+    transcriptJobs.set(operationId, job);
+    let stderr = '';
+    let stdout = '';
+    let settled = false;
+    const finish = result => { if (!settled) { settled = true; resolve(result); } };
+    const sendProgress = (currentSeconds, totalSeconds) => {
+      if (!event.sender.isDestroyed() && totalSeconds > 0) event.sender.send('folder-video:transcript-progress', { operationId, percent: Math.max(0, Math.min(100, Math.round(currentSeconds / totalSeconds * 100))) });
+    };
+    child.stdout.on('data', chunk => {
+      stdout = (stdout + chunk).slice(-6000);
+      const match = stdout.match(/PROGRESS:(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)/g);
+      if (match) { const parts = match[match.length - 1].split(':'); sendProgress(Number(parts[1]), Number(parts[2])); }
+    });
+    child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-6000); });
+    child.once('error', error => { transcriptJobs.delete(operationId); finish({ error: error.code === 'ENOENT' ? 'Python не найден в PATH. Установите Python или добавьте его в PATH.' : (error.message || 'Не удалось запустить Python') }); });
+    child.once('close', async code => {
+      transcriptJobs.delete(operationId);
+      if (job.canceled) { finish({ canceled: true }); return; }
+      if (code !== 0) { finish({ error: stderr || `Транскрипция завершилась с кодом ${code}` }); return; }
+      try {
+        const manifest = sourceSignature(filePath, sourceStat);
+        await writeFile(paths.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+        const result = await loadTranscript(filePath);
+        finish(result.error ? result : { success: true, ...result });
+      } catch (error) { finish({ error: error.message || 'Не удалось сохранить транскрипцию' }); }
+    });
+  });
 }
 
 function speedUpCodecArguments(extension) {
@@ -650,6 +740,19 @@ ipcMain.handle('folder-video:speed-up', async (event, sourcePath, operationId, d
     sendProgress(100);
     return { success: true, outputPath };
   } catch (error) { return { error: error.message || 'Не удалось ускорить видео' }; }
+});
+
+ipcMain.handle('folder-video:transcript-load', async (_event, filePath) => loadTranscript(filePath));
+ipcMain.handle('folder-video:transcript-start', async (event, filePath, operationId) => {
+  if (typeof operationId !== 'string' || !operationId) return { error: 'Некорректная операция' };
+  if (transcriptJobs.has(operationId)) return { error: 'Транскрибация уже выполняется' };
+  return runTranscript(event, filePath, operationId);
+});
+ipcMain.handle('folder-video:transcript-cancel', async (_event, operationId) => {
+  const job = transcriptJobs.get(operationId);
+  if (!job) return { canceled: false };
+  cancelTranscriptJob(job);
+  return { canceled: true };
 });
 
 ipcMain.handle('folder-video:set-title', (event, folderPath) => {
