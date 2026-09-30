@@ -4,10 +4,11 @@
   const STRIP_COUNT = 10;
   const thumbnailQueue = new ThumbnailQueue(2);
   const supported = "MP4, WebM, MOV, AVI, MKV, M4V, OGV";
-  const DEFAULT_SETTINGS = { version: 1, theme: "dark", storage: { metadataDirectory: "", gitRepositoryUrl: "" }, viewer: { columns: 3, seconds: 10, scroll: "center" }, interface: { metadataCollapsed: false, gridCollapsed: false } };
+  const DEFAULT_SETTINGS = { version: 1, theme: "dark", storage: { metadataDirectory: "", gitRepositoryUrl: "" }, viewer: { columns: 3, seconds: 10, scroll: "center" }, interface: { metadataCollapsed: false, gridCollapsed: false }, transcription: { modelPath: "" } };
   const SETTINGS_FIELDS = [
     { group: "Хранилище", key: "storage.metadataDirectory", label: "Каталог метаданных", type: "text", hint: "JSON-файлы и template.html" },
     { group: "Хранилище", key: "storage.gitRepositoryUrl", label: "Git-репозиторий", type: "text", hint: "URL удалённого репозитория" },
+    { group: "Транскрибация", key: "transcription.modelPath", label: "Модель Parakeet TDT", type: "text", hint: "Путь к GGUF-файлу; пустое значение — поиск в кэше HuggingFace" },
     { group: "Просмотр видео", key: "viewer.columns", label: "Колонки кадров", type: "select", options: [3, 4, 5, 6, 8] },
     { group: "Просмотр видео", key: "viewer.seconds", label: "Шаг кадров", type: "select", options: [5, 10, 15, 30, 60], suffix: "секунд" },
     { group: "Просмотр видео", key: "viewer.scroll", label: "Автопрокрутка", type: "select", options: [{ value: "center", label: "По центру" }, { value: "edge", label: "До ближайшего края" }, { value: "off", label: "Выключена" }] },
@@ -945,21 +946,24 @@
       return { start: start, end: end, text: lines.slice(timeLine + 1).join(" ").trim() };
     }).filter(Boolean);
   }
+  function transcriptIconMarkup() {
+    return '<svg class="transcript-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14M5 10h14M5 15h9M5 20h12"/></svg>';
+  }
   function transcriptButtonMarkup(tab) {
     var running = state.transcript && state.transcript.filePath === tab.video.path;
     if (running) return { icon: "×", title: "Отменить транскрибацию: " + Math.round(tab.transcriptProgress || 0) + "%", className: " is-running" };
-    return { icon: "☷", title: tab.transcriptSegments && tab.transcriptSegments.length ? "Перетранскрибировать" : "Транскрибировать видео", className: "" };
+    return { icon: transcriptIconMarkup(), title: tab.transcriptSegments && tab.transcriptSegments.length ? "Перетранскрибировать" : "Транскрибировать видео", className: "" };
   }
   function sidePanelMarkup(tab) {
     var action = transcriptButtonMarkup(tab);
-    return "<aside id=\"gridPanel\" class=\"grid-panel" + (tab.collapsed ? " collapsed" : "") + "\"><header class=\"grid-head\"><button id=\"collapse\" class=\"collapse\" title=\"" + (tab.collapsed ? "Развернуть панель" : "Свернуть панель") + "\" aria-label=\"Показать или скрыть боковую панель\">" + (tab.collapsed ? "◀" : "▶") + "</button><div class=\"panel-modes\"><button data-panel-mode=\"frames\" class=\"" + ((tab.panelMode || "frames") === "frames" ? "active" : "") + "\" title=\"Показать миниатюры\" aria-label=\"Показать миниатюры\">▦</button><button data-panel-mode=\"transcript\" class=\"" + ((tab.panelMode || "frames") === "transcript" ? "active" : "") + "\" title=\"Показать транскрипцию\" aria-label=\"Показать транскрипцию\">≡</button></div><button id=\"transcriptAction\" class=\"transcript-action" + action.className + "\" title=\"" + action.title + "\" aria-label=\"" + action.title + "\">" + action.icon + "</button><div id=\"frameControls\" class=\"frame-controls" + ((tab.panelMode || "frames") === "frames" ? "" : " is-hidden") + "\"><div class=\"grid-control\"><label>Col</label><select id=\"columns\">" + [3,4,5,6,8].map(function(v) { return "<option " + (v === tab.columns ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Sec</label><select id=\"seconds\">" + [5,10,15,30,60].map(function(v) { return "<option " + (v === tab.seconds ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Scroll</label><select id=\"scroll\"><option value=\"center\" " + (tab.scroll === "center" ? "selected" : "") + ">Center</option><option value=\"edge\" " + (tab.scroll === "edge" ? "selected" : "") + ">Edge</option><option value=\"off\" " + (tab.scroll === "off" ? "selected" : "") + ">OFF</option></select></div></div></header><div id=\"gridScroll\" class=\"grid-scroll" + ((tab.panelMode || "frames") === "frames" ? "" : " is-hidden") + "\"><div id=\"frameGrid\" class=\"frame-grid\"></div></div><div id=\"transcriptScroll\" class=\"transcript-scroll" + ((tab.panelMode || "frames") === "transcript" ? "" : " is-hidden") + "\"></div></aside>";
+    return "<aside id=\"gridPanel\" class=\"grid-panel" + (tab.collapsed ? " collapsed" : "") + "\"><header class=\"grid-head\"><button id=\"collapse\" class=\"collapse\" title=\"" + (tab.collapsed ? "Развернуть панель" : "Свернуть панель") + "\" aria-label=\"Показать или скрыть боковую панель\">" + (tab.collapsed ? "◀" : "▶") + "</button><div class=\"panel-modes\"><button data-panel-mode=\"frames\" class=\"" + ((tab.panelMode || "frames") === "frames" ? "active" : "") + "\" title=\"Показать миниатюры\" aria-label=\"Показать миниатюры\">▦</button><button data-panel-mode=\"transcript\" class=\"" + ((tab.panelMode || "frames") === "transcript" ? "active" : "") + "\" title=\"Показать транскрипцию\" aria-label=\"Показать транскрипцию\">" + transcriptIconMarkup() + "</button></div><button id=\"transcriptAction\" class=\"transcript-action" + action.className + "\" title=\"" + action.title + "\" aria-label=\"" + action.title + "\">" + action.icon + "</button><div id=\"frameControls\" class=\"frame-controls" + ((tab.panelMode || "frames") === "frames" ? "" : " is-hidden") + "\"><div class=\"grid-control\"><label>Col</label><select id=\"columns\">" + [3,4,5,6,8].map(function(v) { return "<option " + (v === tab.columns ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Sec</label><select id=\"seconds\">" + [5,10,15,30,60].map(function(v) { return "<option " + (v === tab.seconds ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Scroll</label><select id=\"scroll\"><option value=\"center\" " + (tab.scroll === "center" ? "selected" : "") + ">Center</option><option value=\"edge\" " + (tab.scroll === "edge" ? "selected" : "") + ">Edge</option><option value=\"off\" " + (tab.scroll === "off" ? "selected" : "") + ">OFF</option></select></div></div></header><div id=\"gridScroll\" class=\"grid-scroll" + ((tab.panelMode || "frames") === "frames" ? "" : " is-hidden") + "\"><div id=\"frameGrid\" class=\"frame-grid\"></div></div><div id=\"transcriptScroll\" class=\"transcript-scroll" + ((tab.panelMode || "frames") === "transcript" ? "" : " is-hidden") + "\"></div></aside>";
   }
   function renderTranscriptPanel(tab, player) {
     var host = $("#transcriptScroll"); if (!host || active() !== tab) return;
     if (tab.transcriptStatus === "loading") { host.innerHTML = "<p class=\"transcript-empty\">Открываем сохранённую транскрипцию…</p>"; return; }
     if (tab.transcriptStatus === "running") { host.innerHTML = "<p class=\"transcript-empty is-running\">Транскрибация выполняется…<strong>" + Math.round(tab.transcriptProgress || 0) + "%</strong></p>"; return; }
     if (tab.transcriptError) { host.innerHTML = "<p class=\"transcript-empty is-error\">" + escapeHtml(tab.transcriptError) + "</p>"; return; }
-    if (!tab.transcriptSegments || !tab.transcriptSegments.length) { host.innerHTML = "<p class=\"transcript-empty\">Транскрипции пока нет.<br>Нажмите кнопку ☷ в шапке панели.</p>"; return; }
+    if (!tab.transcriptSegments || !tab.transcriptSegments.length) { host.innerHTML = "<p class=\"transcript-empty\">Транскрипции пока нет.<br>Нажмите кнопку транскрибации в шапке панели.</p>"; return; }
     host.innerHTML = tab.transcriptSegments.map(function(segment, index) { return "<button class=\"transcript-segment\" data-index=\"" + index + "\" data-start=\"" + segment.start + "\" data-end=\"" + segment.end + "\"><time>" + formatTime(segment.start) + "</time><span>" + escapeHtml(segment.text) + "</span></button>"; }).join("");
     host.querySelectorAll(".transcript-segment").forEach(function(button) { button.addEventListener("click", function() { player.currentTime = Number(button.dataset.start); tab.currentTime = player.currentTime; player.play().catch(function() {}); updateActiveTranscript(player.currentTime, tab, true); }); });
     updateActiveTranscript(player.currentTime, tab, false);
@@ -975,7 +979,7 @@
   }
   function updateTranscriptControls(tab) {
     var button = $("#transcriptAction"); if (!button || active() !== tab) return;
-    var action = transcriptButtonMarkup(tab); button.className = "transcript-action" + action.className; button.textContent = action.icon; button.title = action.title; button.setAttribute("aria-label", action.title);
+    var action = transcriptButtonMarkup(tab); button.className = "transcript-action" + action.className; button.innerHTML = action.icon; button.title = action.title; button.setAttribute("aria-label", action.title);
     var playerButton = $("#playerTranscript");
     if (playerButton) { var playerTitle = tab.transcriptSegments && tab.transcriptSegments.length ? "Открыть транскрипцию" : "Транскрибировать видео"; playerButton.title = playerTitle; playerButton.setAttribute("aria-label", playerTitle); }
     renderTranscriptPanel(tab, $("#player"));
@@ -1051,9 +1055,9 @@
     var transcriptButton = document.createElement("button");
     transcriptButton.id = "playerTranscript";
     transcriptButton.className = "player-transcript";
-    transcriptButton.title = "Транскрибировать видео";
+    transcriptButton.title = "Транскрибировать видео моделью Parakeet TDT";
     transcriptButton.setAttribute("aria-label", transcriptButton.title);
-    transcriptButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14M5 10h14M5 15h9M5 20h12"/></svg>';
+    transcriptButton.innerHTML = transcriptIconMarkup();
     $("#playerDelete").before(transcriptButton);
     var layout = $(".player-layout"); layout.insertAdjacentHTML("afterbegin", metadataPanelMarkup(tab)); layout.classList.toggle("metadata-collapsed", tab.metadataCollapsed); layout.classList.toggle("grid-collapsed", tab.collapsed);
     var player = $("#player"); player.currentTime = tab.currentTime || 0; player.playbackRate = playbackRate;

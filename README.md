@@ -24,7 +24,7 @@ Folder-video is a local desktop app for finding the right moment in a video fold
 - Stores a title, YouTube link, Obsidian link, Markdown notes, and tags in JSON files keyed by the video's SHA-256 content hash. The metadata stays with the same file after it is moved.
 - Can save the current frame, copy the filename without its extension, reveal the file, open it in the system player, move it, or send it to the Windows Recycle Bin after confirmation.
 - Creates a two-times-speed copy with FFmpeg when `ffmpeg` is available on `PATH`.
-- Transcribes a video on demand with the local Handy Parakeet model. The right panel switches between frame thumbnails and clickable SRT segments; a segment seeks the player to its timestamp.
+- Transcribes a video on demand with the local Parakeet TDT 0.6B v3 GGUF model through `transcribe.dll`. The right panel switches between frame thumbnails and clickable SRT segments; a segment seeks the player to its timestamp.
 
 ## Install and start
 
@@ -44,7 +44,7 @@ To build the installer from source, use the instructions in the [technical docum
 
 Folder-video scans `mp4`, `webm`, `mov`, `avi`, `mkv`, `m4v`, and `ogv` files. Whether a file plays also depends on its codec support in Chromium.
 
-The full feature set targets Windows 10 and Windows 11. Windows Explorer integration, Recycle Bin deletion, preserved timestamps on accelerated copies, file moves, and Handy transcription are Windows features. The app works with local files and does not upload video content. FFmpeg and Python must be available on `PATH` for accelerated copies and transcription. Transcripts are stored in the app profile, not beside the portable executable; they are reused only while the video path, size, and modification time are unchanged.
+The full feature set targets Windows 10 and Windows 11. Windows Explorer integration, Recycle Bin deletion, preserved timestamps on accelerated copies, file moves, and Parakeet transcription are Windows features. The app works with local files and does not upload video content. FFmpeg, FFprobe, and Python must be available on `PATH` for transcription. The model file `parakeet-tdt-0.6b-v3-Q8_0.gguf` is found in the HuggingFace cache, or you can specify its path in Settings. Transcripts are stored in the app profile, not beside the portable executable; they are reused only while the video path, size, modification time, and selected model path are unchanged. Pressing the transcription button again runs recognition anew.
 
 [Technical documentation](docs/README.md)
 

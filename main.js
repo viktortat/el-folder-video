@@ -38,7 +38,8 @@ function defaultSettings() {
     theme: 'dark',
     storage: { metadataDirectory: path.join(app.getPath('documents'), 'folder-video-metadata'), gitRepositoryUrl: '' },
     viewer: { columns: 3, seconds: 10, scroll: 'center' },
-    interface: { metadataCollapsed: false, gridCollapsed: false }
+    interface: { metadataCollapsed: false, gridCollapsed: false },
+    transcription: { modelPath: '' }
   };
 }
 
@@ -55,7 +56,8 @@ function normalizeSettings(value) {
     version: 1,
     theme: source.theme === 'light' ? 'light' : 'dark',
     storage: { metadataDirectory, gitRepositoryUrl }, viewer: { columns, seconds, scroll },
-    interface: { metadataCollapsed: source.interface?.metadataCollapsed === true, gridCollapsed: source.interface?.gridCollapsed === true }
+    interface: { metadataCollapsed: source.interface?.metadataCollapsed === true, gridCollapsed: source.interface?.gridCollapsed === true },
+    transcription: { modelPath: typeof source.transcription?.modelPath === 'string' ? source.transcription.modelPath.trim() : '' }
   };
 }
 
@@ -202,7 +204,8 @@ function transcriptPaths(filePath) {
 }
 function sourceSignature(filePath, stat) { return { filePath, size: stat.size, mtimeMs: stat.mtimeMs }; }
 function isSameSource(manifest, signature) {
-  return manifest && manifest.filePath === signature.filePath && manifest.size === signature.size && manifest.mtimeMs === signature.mtimeMs;
+  return manifest && manifest.filePath === signature.filePath && manifest.size === signature.size && manifest.mtimeMs === signature.mtimeMs
+    && (manifest.modelPath || '') === (appSettings.transcription?.modelPath || '');
 }
 async function loadTranscript(filePath) {
   if (typeof filePath !== 'string' || !VIDEO_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return { error: 'Некорректный путь к видео' };
@@ -233,19 +236,27 @@ function cancelTranscriptJob(job) {
   else job.child.kill('SIGTERM');
 }
 async function runTranscript(event, filePath, operationId) {
-  if (process.platform !== 'win32') return { error: 'Транскрибация через Handy сейчас поддерживается только в Windows.' };
-  const current = await loadTranscript(filePath);
-  if (current.error) return current;
-  if (!current.stale && current.available) return { success: true, reused: true, ...current };
+  if (process.platform !== 'win32') return { error: 'Локальная транскрибация Parakeet TDT сейчас поддерживается только в Windows.' };
+  if (typeof filePath !== 'string' || !VIDEO_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return { error: 'Некорректный путь к видео' };
   let sourceStat;
-  try { sourceStat = await lstat(filePath); } catch (error) { return { error: error.message || 'Не удалось прочитать видео' }; }
+  try {
+    sourceStat = await lstat(filePath);
+    if (!sourceStat.isFile()) return { error: 'Указанный путь не является файлом' };
+  } catch (error) { return { error: error.message || 'Не удалось прочитать видео' }; }
   const runtime = transcriptionRuntime();
+  const modelPath = appSettings.transcription?.modelPath || '';
   try { await Promise.all([lstat(runtime.script), lstat(runtime.dll)]); }
   catch { return { error: 'Не найдено окружение транскрибации. Переустановите приложение.' }; }
+  if (modelPath) {
+    try { if (!(await lstat(modelPath)).isFile()) return { error: 'Путь к модели Parakeet должен указывать на файл GGUF.' }; }
+    catch (error) { return { error: `Модель Parakeet не найдена: ${error.message}` }; }
+  }
   const paths = transcriptPaths(filePath);
   await mkdir(paths.directory, { recursive: true });
   return new Promise(resolve => {
-    const child = spawn('python', [runtime.script, filePath, '--output-dir', paths.directory, '--output-stem', paths.stem, '--dll', runtime.dll], { windowsHide: true, env: { ...process.env, PYTHONUTF8: '1' } });
+    const args = [runtime.script, filePath, '--output-dir', paths.directory, '--output-stem', paths.stem, '--dll', runtime.dll];
+    if (modelPath) args.push('--model', modelPath);
+    const child = spawn('python', args, { windowsHide: true, env: { ...process.env, PYTHONUTF8: '1' } });
     const job = { operationId, filePath, child, canceled: false };
     transcriptJobs.set(operationId, job);
     let stderr = '';
@@ -267,7 +278,7 @@ async function runTranscript(event, filePath, operationId) {
       if (job.canceled) { finish({ canceled: true }); return; }
       if (code !== 0) { finish({ error: stderr || `Транскрипция завершилась с кодом ${code}` }); return; }
       try {
-        const manifest = sourceSignature(filePath, sourceStat);
+        const manifest = { ...sourceSignature(filePath, sourceStat), modelPath };
         await writeFile(paths.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
         const result = await loadTranscript(filePath);
         finish(result.error ? result : { success: true, ...result });
