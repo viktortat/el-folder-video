@@ -31,6 +31,11 @@ contextBridge.exposeInMainWorld('folderVideo', {
   loadTranscript: filePath => ipcRenderer.invoke('folder-video:transcript-load', filePath),
   startTranscript: (filePath, operationId) => ipcRenderer.invoke('folder-video:transcript-start', filePath, operationId),
   cancelTranscript: operationId => ipcRenderer.invoke('folder-video:transcript-cancel', operationId),
+  loadSummary: filePath => ipcRenderer.invoke('folder-video:summary-load', filePath),
+  startSummary: (filePath, force) => ipcRenderer.invoke('folder-video:summary-start', filePath, force),
+  cancelSummary: filePath => ipcRenderer.invoke('folder-video:summary-cancel', filePath),
+  loadNotes: filePath => ipcRenderer.invoke('folder-video:notes-load', filePath),
+  saveNotes: (filePath, text) => ipcRenderer.invoke('folder-video:notes-save', filePath, text),
   onTranscriptProgress: callback => {
     const listener = (_event, progress) => callback(progress);
     ipcRenderer.on('folder-video:transcript-progress', listener);

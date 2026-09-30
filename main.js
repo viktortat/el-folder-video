@@ -1,4 +1,4 @@
-﻿const { app, BrowserWindow, dialog, ipcMain, shell, nativeImage, Menu, clipboard } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, nativeImage, Menu, clipboard, safeStorage } = require('electron');
 const { readdir, lstat, rename, copyFile, unlink, readFile, writeFile, mkdir, rm } = require('node:fs/promises');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
@@ -7,6 +7,7 @@ const { pathToFileURL } = require('node:url');
 const { VideoMetadataStore } = require('./video-metadata-store');
 const { hashFile } = require('./hash-file');
 const { createSameFileMoveConflict } = require('./move-file-conflict');
+const { srtSegments, transcriptBatches, normalizeSummary } = require('./summary-core');
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.avi', '.mkv', '.m4v', '.ogv']);
 const BASE_TITLE = 'Folder-video-vik';
@@ -27,6 +28,8 @@ const DEFAULT_METADATA_TEMPLATE = `<form id="metadataForm">
 let metadataStore;
 const metadataJobs = new Map();
 const transcriptJobs = new Map();
+const summaryJobs = new Map();
+const notesSaveJobs = new Map();
 let pendingLaunchTarget = null;
 let isRendererReady = false;
 let appSettings;
@@ -37,9 +40,10 @@ function defaultSettings() {
     version: 1,
     theme: 'dark',
     storage: { metadataDirectory: path.join(app.getPath('documents'), 'folder-video-metadata'), gitRepositoryUrl: '' },
-    viewer: { columns: 3, seconds: 10, scroll: 'center' },
+    viewer: { columns: 3, seconds: 10, scroll: 'center', panelWidth: 410 },
     interface: { metadataCollapsed: false, gridCollapsed: false },
-    transcription: { modelPath: '' }
+    transcription: { modelPath: '' },
+    ai: { model: 'deepseek-flash', apiKey: '', keyConfigured: false, clearKey: false }
   };
 }
 
@@ -49,28 +53,42 @@ function normalizeSettings(value) {
   const columns = [3, 4, 5, 6, 8].includes(source.viewer?.columns) ? source.viewer.columns : defaults.viewer.columns;
   const seconds = [5, 10, 15, 30, 60].includes(source.viewer?.seconds) ? source.viewer.seconds : defaults.viewer.seconds;
   const scroll = ['center', 'edge', 'off'].includes(source.viewer?.scroll) ? source.viewer.scroll : defaults.viewer.scroll;
+  const panelWidth = Number.isFinite(source.viewer?.panelWidth) ? Math.max(280, Math.min(720, Math.round(source.viewer.panelWidth))) : defaults.viewer.panelWidth;
   const metadataDirectory = typeof source.storage?.metadataDirectory === 'string' && source.storage.metadataDirectory.trim()
     ? path.resolve(source.storage.metadataDirectory) : defaults.storage.metadataDirectory;
   const gitRepositoryUrl = typeof source.storage?.gitRepositoryUrl === 'string' ? source.storage.gitRepositoryUrl.trim() : '';
   return {
     version: 1,
     theme: source.theme === 'light' ? 'light' : 'dark',
-    storage: { metadataDirectory, gitRepositoryUrl }, viewer: { columns, seconds, scroll },
+    storage: { metadataDirectory, gitRepositoryUrl }, viewer: { columns, seconds, scroll, panelWidth },
     interface: { metadataCollapsed: source.interface?.metadataCollapsed === true, gridCollapsed: source.interface?.gridCollapsed === true },
-    transcription: { modelPath: typeof source.transcription?.modelPath === 'string' ? source.transcription.modelPath.trim() : '' }
+    transcription: { modelPath: typeof source.transcription?.modelPath === 'string' ? source.transcription.modelPath.trim() : '' },
+    ai: { model: typeof source.ai?.model === 'string' && source.ai.model.trim() ? source.ai.model.trim() : 'deepseek-flash', apiKey: '', keyConfigured: false, clearKey: false }
   };
 }
 
 function settingsPath() { return path.join(app.getPath('userData'), 'config.json'); }
+function deepSeekKeyPath() { return path.join(app.getPath('userData'), 'deepseek-key.bin'); }
+async function hasDeepSeekKey() {
+  try { return Boolean(safeStorage.decryptString(await readFile(deepSeekKeyPath()))); }
+  catch { return false; }
+}
+async function readDeepSeekKey() {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Шифрование ключа недоступно в этой системе.');
+  try { return safeStorage.decryptString(await readFile(deepSeekKeyPath())); }
+  catch { throw new Error('Ключ DeepSeek не найден или не удалось его расшифровать. Укажите ключ заново в настройках.'); }
+}
 
 async function loadSettings() {
   try {
     const value = JSON.parse(await readFile(settingsPath(), 'utf8'));
     appSettings = normalizeSettings(value);
+    appSettings.ai.keyConfigured = await hasDeepSeekKey();
     hasSettingsFile = true;
     return { settings: appSettings };
   } catch (error) {
     appSettings = defaultSettings();
+    appSettings.ai.keyConfigured = await hasDeepSeekKey();
     hasSettingsFile = false;
     return { settings: appSettings, warning: error.code === 'ENOENT' ? null : 'Не удалось прочитать config.json; использованы настройки по умолчанию.' };
   }
@@ -79,8 +97,13 @@ async function loadSettings() {
 async function saveSettings(settings) {
   const normalized = normalizeSettings(settings);
   try {
+    const newKey = typeof settings?.ai?.apiKey === 'string' ? settings.ai.apiKey.trim() : '';
+    if (newKey && !safeStorage.isEncryptionAvailable()) return { error: 'Шифрование ключа недоступно в этой системе.' };
     await mkdir(normalized.storage.metadataDirectory, { recursive: true });
     await mkdir(path.dirname(settingsPath()), { recursive: true });
+    if (newKey) await writeFile(deepSeekKeyPath(), safeStorage.encryptString(newKey));
+    else if (settings?.ai?.clearKey === true) await unlink(deepSeekKeyPath()).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    normalized.ai.keyConfigured = await hasDeepSeekKey();
     const temporaryPath = `${settingsPath()}.${process.pid}.tmp`;
     await writeFile(temporaryPath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
     await rename(temporaryPath, settingsPath());
@@ -202,6 +225,38 @@ function transcriptPaths(filePath) {
   const directory = transcriptDirectory();
   return { directory, stem, srtPath: path.join(directory, `${stem}.srt`), manifestPath: path.join(directory, `${stem}.json`) };
 }
+function notesPath(filePath) { return path.join(transcriptDirectory(), `${transcriptStem(filePath)}.notes.md`); }
+async function validateNotesVideo(filePath) {
+  if (typeof filePath !== 'string' || !VIDEO_EXTENSIONS.has(path.extname(filePath).toLowerCase())) throw new Error('Некорректный путь к видео');
+  const stat = await lstat(filePath);
+  if (!stat.isFile()) throw new Error('Указанный путь не является файлом');
+}
+async function loadNotes(filePath) {
+  try { await validateNotesVideo(filePath); }
+  catch (error) { return { error: error.message || 'Не удалось открыть видео' }; }
+  try { return { text: await readFile(notesPath(filePath), 'utf8') }; }
+  catch (error) { return error.code === 'ENOENT' ? { text: '' } : { error: error.message || 'Не удалось открыть заметки' }; }
+}
+function saveNotes(filePath, text) {
+  if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > 1048576) return Promise.resolve({ error: 'Заметки должны быть текстом размером до 1 МБ.' });
+  const previous = notesSaveJobs.get(filePath) || Promise.resolve();
+  const job = previous.catch(() => {}).then(async () => {
+    try {
+      await validateNotesVideo(filePath);
+      await mkdir(transcriptDirectory(), { recursive: true });
+      const target = notesPath(filePath);
+      const temporary = `${target}.${process.pid}.tmp`;
+      if (text.trim()) {
+        try { await writeFile(temporary, text, 'utf8'); await rename(temporary, target); }
+        catch (error) { await rm(temporary, { force: true }).catch(() => {}); throw error; }
+      } else await rm(target, { force: true });
+      return { success: true };
+    } catch (error) { return { error: error.message || 'Не удалось сохранить заметки' }; }
+  });
+  notesSaveJobs.set(filePath, job);
+  job.finally(() => { if (notesSaveJobs.get(filePath) === job) notesSaveJobs.delete(filePath); });
+  return job;
+}
 function sourceSignature(filePath, stat) { return { filePath, size: stat.size, mtimeMs: stat.mtimeMs }; }
 function isSameSource(manifest, signature) {
   return manifest && manifest.filePath === signature.filePath && manifest.size === signature.size && manifest.mtimeMs === signature.mtimeMs
@@ -285,6 +340,107 @@ async function runTranscript(event, filePath, operationId) {
       } catch (error) { finish({ error: error.message || 'Не удалось сохранить транскрипцию' }); }
     });
   });
+}
+
+function summaryPath(filePath) { return path.join(transcriptDirectory(), `${transcriptStem(filePath)}.summary.json`); }
+function transcriptHash(srt) { return createHash('sha256').update(srt).digest('hex'); }
+async function loadSummary(filePath) {
+  const transcript = await loadTranscript(filePath);
+  if (transcript.error) return transcript;
+  if (!transcript.available) return { available: false, stale: Boolean(transcript.stale) };
+  try {
+    const saved = JSON.parse(await readFile(summaryPath(filePath), 'utf8'));
+    const stat = await lstat(filePath);
+    const valid = isSameSource(saved, sourceSignature(filePath, stat))
+      && saved.transcriptHash === transcriptHash(transcript.srt)
+      && saved.model === appSettings.ai.model;
+    if (valid && (typeof saved.summary?.overview !== 'string' || !Array.isArray(saved.summary.topics)
+      || saved.summary.topics.some(topic => typeof topic.title !== 'string' || !Number.isFinite(topic.start)))) {
+      return { error: 'Сохранённая сводка повреждена. Создайте её заново.' };
+    }
+    return valid ? { available: true, summary: saved.summary } : { available: false, stale: true };
+  } catch (error) {
+    return error.code === 'ENOENT' ? { available: false } : { error: `Не удалось открыть сводку: ${error.message}` };
+  }
+}
+async function askDeepSeek(key, model, source, partial, controller) {
+  const instruction = partial
+    ? 'Сделай краткую промежуточную сводку этого фрагмента и выдели до 5 основных тем.'
+    : 'Сделай общую сводку в 1–3 абзацах и выдели до 10 основных тем в порядке появления.';
+  const system = `Ты составляешь содержание видео только по транскрипции. Пиши по-русски. Не додумывай факты. ${instruction} Верни только JSON вида {"overview":"текст","topics":[{"title":"тема","description":"краткое описание","segmentIndex":1}]}. Для каждой темы укажи номер реально приведённого сегмента. Не выдумывай номера.`;
+  const timeout = setTimeout(() => controller.abort(), 120000);
+  try {
+    const response = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST', signal: controller.signal,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: source }], thinking: { type: 'disabled' }, response_format: { type: 'json_object' }, max_tokens: 2400, stream: false })
+    });
+    if (!response.ok) {
+      let detail = '';
+      try { detail = (await response.json()).error?.message || ''; } catch {}
+      throw new Error(`DeepSeek вернул HTTP ${response.status}${detail ? `: ${String(detail).slice(0, 250)}` : ''}`);
+    }
+    const body = await response.json();
+    if (body.choices?.[0]?.finish_reason === 'length') throw new Error('DeepSeek обрезал ответ. Повторите запрос.');
+    const content = body.choices?.[0]?.message?.content;
+    if (typeof content !== 'string' || !content.trim()) throw new Error('DeepSeek вернул пустой ответ. Повторите запрос.');
+    const parsed = JSON.parse(content);
+    if (typeof parsed.overview !== 'string' || !Array.isArray(parsed.topics)) throw new Error('DeepSeek вернул сводку в неверном формате.');
+    return parsed;
+  } finally { clearTimeout(timeout); }
+}
+async function generateSummary(filePath, controller) {
+  const transcript = await loadTranscript(filePath);
+  if (transcript.error) throw new Error(transcript.error);
+  if (!transcript.available) throw new Error('Сначала создайте актуальную транскрипцию видео.');
+  const segments = srtSegments(transcript.srt);
+  if (!segments.length) throw new Error('Транскрипция пуста; сводку создать нельзя.');
+  const key = await readDeepSeekKey();
+  const model = appSettings.ai.model;
+  const batches = transcriptBatches(segments);
+  let raw;
+  let allowed = new Set(segments.map((_, index) => index + 1));
+  if (batches.length === 1) raw = await askDeepSeek(key, model, batches[0].join('\n'), false, controller);
+  else {
+    const partials = [];
+    const candidateIndices = new Set();
+    for (const batch of batches) {
+      const part = await askDeepSeek(key, model, batch.join('\n'), true, controller);
+      const batchIndices = new Set(batch.map(line => Number(line.match(/^\[(\d+)\]/)[1])));
+      const normalized = normalizeSummary(part, segments, batchIndices);
+      partials.push({ overview: normalized.overview, topics: part.topics.filter(topic => batchIndices.has(Number(topic.segmentIndex))).slice(0, 5) });
+      for (const topic of partials[partials.length - 1].topics) candidateIndices.add(Number(topic.segmentIndex));
+    }
+    allowed = candidateIndices;
+    raw = await askDeepSeek(key, model, `Промежуточные сводки с номерами исходных сегментов:\n${JSON.stringify(partials)}`, false, controller);
+  }
+  const summary = normalizeSummary(raw, segments, allowed);
+  if (controller.signal.aborted) throw new Error('Создание сводки отменено.');
+  const stat = await lstat(filePath);
+  const record = { ...sourceSignature(filePath, stat), modelPath: appSettings.transcription?.modelPath || '', transcriptHash: transcriptHash(transcript.srt), model, summary };
+  const target = summaryPath(filePath);
+  const temporary = `${target}.${process.pid}.tmp`;
+  await mkdir(transcriptDirectory(), { recursive: true });
+  try { await writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, 'utf8'); await rename(temporary, target); }
+  catch (error) { await rm(temporary, { force: true }).catch(() => {}); throw error; }
+  return { available: true, summary };
+}
+function runSummary(filePath, force) {
+  const existing = summaryJobs.get(filePath);
+  if (existing) return existing.promise;
+  const controller = new AbortController();
+  const promise = (async () => {
+    try {
+      if (!force) {
+        const saved = await loadSummary(filePath);
+        if (saved.available || saved.error) return saved;
+      }
+      return await generateSummary(filePath, controller);
+    } catch (error) { return { error: controller.signal.aborted ? 'Создание сводки отменено или превышено время ожидания.' : error.message }; }
+    finally { summaryJobs.delete(filePath); }
+  })();
+  summaryJobs.set(filePath, { controller, promise });
+  return promise;
 }
 
 function speedUpCodecArguments(extension) {
@@ -765,6 +921,19 @@ ipcMain.handle('folder-video:transcript-cancel', async (_event, operationId) => 
   cancelTranscriptJob(job);
   return { canceled: true };
 });
+ipcMain.handle('folder-video:summary-load', async (_event, filePath) => loadSummary(filePath));
+ipcMain.handle('folder-video:summary-start', async (_event, filePath, force = false) => {
+  if (typeof filePath !== 'string' || !VIDEO_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return { error: 'Некорректный путь к видео' };
+  return runSummary(filePath, force === true);
+});
+ipcMain.handle('folder-video:summary-cancel', (_event, filePath) => {
+  const job = summaryJobs.get(filePath);
+  if (!job) return { canceled: false };
+  job.controller.abort();
+  return { canceled: true };
+});
+ipcMain.handle('folder-video:notes-load', async (_event, filePath) => loadNotes(filePath));
+ipcMain.handle('folder-video:notes-save', async (_event, filePath, text) => saveNotes(filePath, text));
 
 ipcMain.handle('folder-video:set-title', (event, folderPath) => {
   const title = typeof folderPath === 'string' && folderPath

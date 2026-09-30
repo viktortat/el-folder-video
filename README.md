@@ -3,6 +3,7 @@
 [Русская версия](README.ru.md)
 
 Folder-video is a local desktop app for finding the right moment in a video folder. It shows each file as a strip of frames, then opens the selected video in its own tab with a detailed frame grid.
+Resize the frame and transcript sidebar by dragging its left edge. The app saves the selected width; with the divider focused, use the left and right arrow keys.
 
 ![Frame-by-frame video review](docs/screens/video-review.png)
 
@@ -25,6 +26,8 @@ Folder-video is a local desktop app for finding the right moment in a video fold
 - Can save the current frame, copy the filename without its extension, reveal the file, open it in the system player, move it, or send it to the Windows Recycle Bin after confirmation.
 - Creates a two-times-speed copy with FFmpeg when `ffmpeg` is available on `PATH`.
 - Transcribes a video on demand with the local Parakeet TDT 0.6B v3 GGUF model through `transcribe.dll`. The right panel switches between frame thumbnails and clickable SRT segments; a segment seeks the player to its timestamp.
+- With a DeepSeek API key in Settings, automatically creates a Russian overview and up to ten linked topics from the transcript. Click a topic to seek to its source segment. The summary is stored beside the transcript as `<video-stem>.summary.json`; the API key is stored separately using Electron's encrypted storage.
+- Keeps timestamped video notes in a separate `<video-stem>.notes.md` file under `%APPDATA%\folder-video\transcripts`. Pause to write in the field below the player; playback saves the text and shows a matching note for ten seconds of video time. The Notes panel has a raw `[10:40]` / `---` editor and clickable links to each note.
 
 ## Install and start
 
@@ -39,12 +42,13 @@ To build the installer from source, use the instructions in the [technical docum
 3. Open a video row. Adjust the number of frame-grid columns, the time interval, and automatic scrolling if needed.
 4. Click or drag across the grid to seek. The arrow keys, Home, End, and Space also control the player; Space toggles play/pause.
 5. Add notes and tags in the metadata panel, then save them.
+6. For timed notes, pause at the desired moment and type below the player. In the Notes panel, edit the full text with `[m:ss]` headers and `---` separator lines; changes save automatically. The editor starts collapsed; the button beside its heading expands it, while the note links remain visible in time order. Click a note in the list to seek to its time and return focus to the playback control, so Space pauses the video.
 
 ## Supported files and limits
 
 Folder-video scans `mp4`, `webm`, `mov`, `avi`, `mkv`, `m4v`, and `ogv` files. Whether a file plays also depends on its codec support in Chromium.
 
-The full feature set targets Windows 10 and Windows 11. Windows Explorer integration, Recycle Bin deletion, preserved timestamps on accelerated copies, file moves, and Parakeet transcription are Windows features. The app works with local files and does not upload video content. FFmpeg, FFprobe, and Python must be available on `PATH` for transcription. The model file `parakeet-tdt-0.6b-v3-Q8_0.gguf` is found in the HuggingFace cache, or you can specify its path in Settings. Transcripts are stored in the app profile, not beside the portable executable; they are reused only while the video path, size, modification time, and selected model path are unchanged. Pressing the transcription button again runs recognition anew.
+The full feature set targets Windows 10 and Windows 11. Windows Explorer integration, Recycle Bin deletion, preserved timestamps on accelerated copies, file moves, and Parakeet transcription are Windows features. Video content stays local; when summarization is enabled, transcript text is sent to the DeepSeek API. FFmpeg, FFprobe, and Python must be available on `PATH` for transcription. The model file `parakeet-tdt-0.6b-v3-Q8_0.gguf` is found in the HuggingFace cache, or you can specify its path in Settings. Transcripts and summaries are stored in the app profile, not beside the portable executable. A summary is regenerated when its source transcript or selected DeepSeek model changes. Failed requests can be retried from the Summary tab.
 
 [Technical documentation](docs/README.md)
 

@@ -2,13 +2,17 @@
   "use strict";
 
   const STRIP_COUNT = 10;
+  const notesCore = window.NotesCore;
   const thumbnailQueue = new ThumbnailQueue(2);
   const supported = "MP4, WebM, MOV, AVI, MKV, M4V, OGV";
-  const DEFAULT_SETTINGS = { version: 1, theme: "dark", storage: { metadataDirectory: "", gitRepositoryUrl: "" }, viewer: { columns: 3, seconds: 10, scroll: "center" }, interface: { metadataCollapsed: false, gridCollapsed: false }, transcription: { modelPath: "" } };
+  const DEFAULT_SETTINGS = { version: 1, theme: "dark", storage: { metadataDirectory: "", gitRepositoryUrl: "" }, viewer: { columns: 3, seconds: 10, scroll: "center", panelWidth: 410 }, interface: { metadataCollapsed: false, gridCollapsed: false }, transcription: { modelPath: "" }, ai: { model: "deepseek-flash", apiKey: "", keyConfigured: false, clearKey: false } };
   const SETTINGS_FIELDS = [
     { group: "Хранилище", key: "storage.metadataDirectory", label: "Каталог метаданных", type: "text", hint: "JSON-файлы и template.html" },
     { group: "Хранилище", key: "storage.gitRepositoryUrl", label: "Git-репозиторий", type: "text", hint: "URL удалённого репозитория" },
     { group: "Транскрибация", key: "transcription.modelPath", label: "Модель Parakeet TDT", type: "text", hint: "Путь к GGUF-файлу; пустое значение — поиск в кэше HuggingFace" },
+    { group: "Суммаризация", key: "ai.apiKey", label: "Ключ DeepSeek", type: "password", hint: "Текст транскрипции отправляется в DeepSeek. Ключ шифруется; пустое поле оставляет прежний." },
+    { group: "Суммаризация", key: "ai.model", label: "Название модели", type: "text", hint: "По умолчанию deepseek-flash" },
+    { group: "Суммаризация", key: "ai.clearKey", label: "Удалить сохранённый ключ", type: "checkbox" },
     { group: "Просмотр видео", key: "viewer.columns", label: "Колонки кадров", type: "select", options: [3, 4, 5, 6, 8] },
     { group: "Просмотр видео", key: "viewer.seconds", label: "Шаг кадров", type: "select", options: [5, 10, 15, 30, 60], suffix: "секунд" },
     { group: "Просмотр видео", key: "viewer.scroll", label: "Автопрокрутка", type: "select", options: [{ value: "center", label: "По центру" }, { value: "edge", label: "До ближайшего края" }, { value: "off", label: "Выключена" }] },
@@ -392,6 +396,7 @@
     var replacement = playerTab && playerTab.type === 'player' && playerTab.video.path === filePath
       ? adjacentPlayerVideo(playerTab, 1) || adjacentPlayerVideo(playerTab, -1)
       : null;
+    await Promise.all(state.tabs.filter(function(tab) { return tab.type === "player" && tab.video.path === filePath; }).map(flushPlayerNotes));
     var result = await window.folderVideo.moveFile(filePath);
     if (!result) return;
     if (result.canceled) return;
@@ -422,6 +427,7 @@
     var replacement = playerTab && playerTab.type === 'player' && playerTab.video.path === filePath
       ? adjacentPlayerVideo(playerTab, 1) || adjacentPlayerVideo(playerTab, -1)
       : null;
+    await Promise.all(state.tabs.filter(function(tab) { return tab.type === "player" && tab.video.path === filePath; }).map(flushPlayerNotes));
     var result = await window.folderVideo.deleteFile(filePath);
     if (!result || result.canceled) return;
     if (result.error) { notice('Ошибка: ' + result.error); return; }
@@ -448,6 +454,7 @@
       button.addEventListener("click", function(tid) {
         return function(event) {
           if (event.target.closest(".close-tab")) return closeTab(tid);
+          var previous = active(); if (previous && previous.type === "player" && previous.id !== tid) flushPlayerNotes(previous);
           state.activeTab = tid; render();
         };
       }(tab.id));
@@ -467,12 +474,14 @@
   function readSetting(object, key) { return key.split(".").reduce(function(value, part) { return value[part]; }, object); }
   function writeSetting(object, key, value) { var parts = key.split("."); var target = object; for (var i = 0; i < parts.length - 1; i++) target = target[parts[i]]; target[parts[parts.length - 1]] = value; }
   function openSettings() {
+    var previous = active(); if (previous && previous.type === "player") flushPlayerNotes(previous);
     var tab = state.tabs.find(function(item) { return item.type === "settings"; });
     if (!tab) { tab = { id: "settings", type: "settings", draft: clone(state.settings), dirty: false }; state.tabs.push(tab); }
     state.activeTab = tab.id; render();
   }
   function settingsControlMarkup(field, value) {
-    if (field.type === "text") return "<input data-setting=\"" + field.key + "\" value=\"" + escapeHtml(value) + "\" />";
+    if (field.type === "password") return "<input data-setting=\"" + field.key + "\" type=\"password\" autocomplete=\"off\" placeholder=\"" + (state.settings.ai.keyConfigured ? "Ключ сохранён" : "Введите API-ключ") + "\" value=\"\" />";
+    if (field.type === "text") return "<input data-setting=\"" + field.key + "\" type=\"text\" value=\"" + escapeHtml(value) + "\" />";
     if (field.type === "checkbox") return "<label class=\"settings-switch\"><input data-setting=\"" + field.key + "\" type=\"checkbox\"" + (value ? " checked" : "") + "/><span></span></label>";
     var options = field.options.map(function(option) { var item = typeof option === "object" ? option : { value: option, label: String(option) + (field.suffix ? " " + field.suffix : "") }; return "<option value=\"" + escapeHtml(item.value) + "\"" + (String(item.value) === String(value) ? " selected" : "") + ">" + escapeHtml(item.label) + "</option>"; }).join("");
     return "<select data-setting=\"" + field.key + "\">" + options + "</select>";
@@ -487,12 +496,14 @@
   }
   async function saveSettingsTab(tab) {
     var switchingDatabase = tab.draft.storage.metadataDirectory !== state.settings.storage.metadataDirectory;
+    var changingSummaryModel = tab.draft.ai.model !== state.settings.ai.model;
     var dirtyPlayers = state.tabs.filter(function(item) { return item.type === "player" && item.metadataDirty; });
     if (switchingDatabase && dirtyPlayers.length && !confirm("В открытых вкладках есть несохранённые метаданные. Сменить каталог без сохранения?")) return;
     var result = await window.folderVideo.saveSettings(tab.draft);
     if (result.error) { notice(result.error); return; }
     state.settings = result.settings; state.metadataCollapsed = state.settings.interface.metadataCollapsed; state.gridCollapsed = state.settings.interface.gridCollapsed; applyTheme(state.settings.theme, false);
     tab.draft = clone(state.settings); tab.dirty = false;
+    state.tabs.filter(function(item) { return item.type === "player" && (changingSummaryModel || !item.summaryData); }).forEach(function(item) { item.summaryStatus = null; if (changingSummaryModel) item.summaryData = null; });
     if (switchingDatabase) state.tabs.filter(function(item) { return item.type === "player"; }).forEach(function(item) { item.metadataStatus = "idle"; item.metadata = null; item.metadataDraft = null; item.metadataDirty = false; loadMetadata(item); });
     render(); notice("Настройки сохранены", true);
   }
@@ -638,6 +649,7 @@
     if (folder) loadFolder(folder); else notice("Не удалось получить путь перетащенной папки.");
   }
   async function loadFolder(folder, preserveTabs) {
+    if (!preserveTabs) await Promise.all(state.tabs.filter(function(tab) { return tab.type === "player"; }).map(flushPlayerNotes));
     addRecentFolder(folder);
     state.folderPath = folder; state.page = 1;
     if (preserveTabs) {
@@ -835,25 +847,29 @@
   }
   function setPlayerVideo(tab, video) {
     if (state.transcript && state.transcript.filePath === tab.video.path) window.folderVideo.cancelTranscript(state.transcript.operationId);
+    if (tab.summaryStatus === "running") window.folderVideo.cancelSummary(tab.video.path);
     releasePlayerResources(tab.video.url);
     if (tab.metadataRequestId) window.folderVideo.cancelMetadata(tab.metadataRequestId);
-    tab.video = video; tab.label = video.name; tab.currentTime = 0; tab.isDragging = false; tab.panelMode = "frames"; tab.transcriptStatus = null; tab.transcriptSegments = []; tab.transcriptError = ""; tab.transcriptProgress = 0;
+    tab.video = video; tab.label = video.name; tab.currentTime = 0; tab.isDragging = false; tab.panelMode = "frames"; tab.transcriptStatus = null; tab.transcriptSegments = []; tab.transcriptError = ""; tab.transcriptProgress = 0; tab.summaryStatus = null; tab.summaryData = null; tab.summaryError = "";
+    tab.notesStatus = null; tab.notesText = ""; tab.notesDirty = false; tab.notesError = ""; tab.notesEditorCollapsed = true; tab.noteEditStart = null; tab.noteEditBlockIndex = null;
     tab.metadataStatus = "idle"; tab.metadata = null; tab.metadataDraft = null; tab.metadataDirty = false; tab.metadataRequestId = null; tab.markdownMode = "edit";
   }
-  function switchPlayerVideo(tab, direction) {
+  async function switchPlayerVideo(tab, direction) {
     var nextVideo = adjacentPlayerVideo(tab, direction);
     if (!nextVideo) return;
+    await flushPlayerNotes(tab);
     setPlayerVideo(tab, nextVideo);
     render();
   }
   function openVideo(video) {
+    var previous = active(); if (previous && previous.type === "player" && previous.video.path !== video.path) flushPlayerNotes(previous);
     rememberRecentVideo(video);
     for (var ti = 0; ti < state.tabs.length; ti++) {
       if (state.tabs[ti].type === "player" && state.tabs[ti].video.path === video.path) {
         state.activeTab = state.tabs[ti].id; render(); return;
       }
     }
-    var tab = { id: "player-" + Date.now() + "-" + Math.random().toString(16).slice(2), type: "player", label: video.name, video: video, columns: state.settings.viewer.columns, seconds: state.settings.viewer.seconds, scroll: state.settings.viewer.scroll, collapsed: state.gridCollapsed, metadataCollapsed: state.metadataCollapsed, panelMode: "frames", transcriptStatus: null, transcriptSegments: [], transcriptError: "", transcriptProgress: 0, currentTime: 0, metadataStatus: "idle", metadata: null, metadataDraft: null, metadataDirty: false, markdownMode: "edit" };
+    var tab = { id: "player-" + Date.now() + "-" + Math.random().toString(16).slice(2), type: "player", label: video.name, video: video, columns: state.settings.viewer.columns, seconds: state.settings.viewer.seconds, scroll: state.settings.viewer.scroll, panelWidth: state.settings.viewer.panelWidth || 410, collapsed: state.gridCollapsed, metadataCollapsed: state.metadataCollapsed, panelMode: "frames", transcriptStatus: null, transcriptSegments: [], transcriptError: "", transcriptProgress: 0, summaryStatus: null, summaryData: null, summaryError: "", notesStatus: null, notesText: "", notesDirty: false, notesError: "", notesEditorCollapsed: true, noteEditStart: null, noteEditBlockIndex: null, currentTime: 0, metadataStatus: "idle", metadata: null, metadataDraft: null, metadataDirty: false, markdownMode: "edit" };
     state.tabs.push(tab); state.activeTab = tab.id; render();
   }
   async function closeTab(id) {
@@ -868,8 +884,9 @@
       if (choice === "cancel") return;
       if (choice === "save") { await saveSettingsTab(tab); if (tab.dirty) return; }
     }
+    if (tab.type === "player") await flushPlayerNotes(tab);
     if (tab.metadataRequestId) window.folderVideo.cancelMetadata(tab.metadataRequestId);
-    if (tab.type === "player") { if (state.transcript && state.transcript.filePath === tab.video.path) window.folderVideo.cancelTranscript(state.transcript.operationId); releasePlayerResources(tab.video.url); }
+    if (tab.type === "player") { if (state.transcript && state.transcript.filePath === tab.video.path) window.folderVideo.cancelTranscript(state.transcript.operationId); if (tab.summaryStatus === "running") window.folderVideo.cancelSummary(tab.video.path); releasePlayerResources(tab.video.url); }
     state.tabs.splice(idx, 1);
     if (state.activeTab === id) {
       state.activeTab = state.tabs.length
@@ -954,9 +971,164 @@
     if (running) return { icon: "×", title: "Отменить транскрибацию: " + Math.round(tab.transcriptProgress || 0) + "%", className: " is-running" };
     return { icon: transcriptIconMarkup(), title: tab.transcriptSegments && tab.transcriptSegments.length ? "Перетранскрибировать" : "Транскрибировать видео", className: "" };
   }
-  function sidePanelMarkup(tab) {
+  function baseSidePanelMarkup(tab) {
     var action = transcriptButtonMarkup(tab);
-    return "<aside id=\"gridPanel\" class=\"grid-panel" + (tab.collapsed ? " collapsed" : "") + "\"><header class=\"grid-head\"><button id=\"collapse\" class=\"collapse\" title=\"" + (tab.collapsed ? "Развернуть панель" : "Свернуть панель") + "\" aria-label=\"Показать или скрыть боковую панель\">" + (tab.collapsed ? "◀" : "▶") + "</button><div class=\"panel-modes\"><button data-panel-mode=\"frames\" class=\"" + ((tab.panelMode || "frames") === "frames" ? "active" : "") + "\" title=\"Показать миниатюры\" aria-label=\"Показать миниатюры\">▦</button><button data-panel-mode=\"transcript\" class=\"" + ((tab.panelMode || "frames") === "transcript" ? "active" : "") + "\" title=\"Показать транскрипцию\" aria-label=\"Показать транскрипцию\">" + transcriptIconMarkup() + "</button></div><button id=\"transcriptAction\" class=\"transcript-action" + action.className + "\" title=\"" + action.title + "\" aria-label=\"" + action.title + "\">" + action.icon + "</button><div id=\"frameControls\" class=\"frame-controls" + ((tab.panelMode || "frames") === "frames" ? "" : " is-hidden") + "\"><div class=\"grid-control\"><label>Col</label><select id=\"columns\">" + [3,4,5,6,8].map(function(v) { return "<option " + (v === tab.columns ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Sec</label><select id=\"seconds\">" + [5,10,15,30,60].map(function(v) { return "<option " + (v === tab.seconds ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Scroll</label><select id=\"scroll\"><option value=\"center\" " + (tab.scroll === "center" ? "selected" : "") + ">Center</option><option value=\"edge\" " + (tab.scroll === "edge" ? "selected" : "") + ">Edge</option><option value=\"off\" " + (tab.scroll === "off" ? "selected" : "") + ">OFF</option></select></div></div></header><div id=\"gridScroll\" class=\"grid-scroll" + ((tab.panelMode || "frames") === "frames" ? "" : " is-hidden") + "\"><div id=\"frameGrid\" class=\"frame-grid\"></div></div><div id=\"transcriptScroll\" class=\"transcript-scroll" + ((tab.panelMode || "frames") === "transcript" ? "" : " is-hidden") + "\"></div></aside>";
+    return "<aside id=\"gridPanel\" class=\"grid-panel" + (tab.collapsed ? " collapsed" : "") + "\"><button id=\"panelResizer\" class=\"panel-resizer\" type=\"button\" role=\"slider\" tabindex=\"0\" aria-valuemin=\"280\" aria-valuemax=\"720\" aria-valuenow=\"" + Math.round(tab.panelWidth || 410) + "\" title=\"Изменить ширину боковой панели\" aria-label=\"Изменить ширину боковой панели\" aria-orientation=\"vertical\"></button><header class=\"grid-head\"><button id=\"collapse\" class=\"collapse\" title=\"" + (tab.collapsed ? "Развернуть панель" : "Свернуть панель") + "\" aria-label=\"Показать или скрыть боковую панель\">" + (tab.collapsed ? "◀" : "▶") + "</button><div class=\"panel-modes\"><button data-panel-mode=\"frames\" class=\"" + ((tab.panelMode || "frames") === "frames" ? "active" : "") + "\" title=\"Показать миниатюры\" aria-label=\"Показать миниатюры\">▦</button><button data-panel-mode=\"transcript\" class=\"" + ((tab.panelMode || "frames") === "transcript" ? "active" : "") + "\" title=\"Показать транскрипцию\" aria-label=\"Показать транскрипцию\">" + transcriptIconMarkup() + "</button></div><button id=\"transcriptAction\" class=\"transcript-action" + action.className + "\" title=\"" + action.title + "\" aria-label=\"" + action.title + "\">" + action.icon + "</button><div id=\"frameControls\" class=\"frame-controls" + ((tab.panelMode || "frames") === "frames" ? "" : " is-hidden") + "\"><div class=\"grid-control\"><label>Col</label><select id=\"columns\">" + [3,4,5,6,8].map(function(v) { return "<option " + (v === tab.columns ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Sec</label><select id=\"seconds\">" + [5,10,15,30,60].map(function(v) { return "<option " + (v === tab.seconds ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Scroll</label><select id=\"scroll\"><option value=\"center\" " + (tab.scroll === "center" ? "selected" : "") + ">Center</option><option value=\"edge\" " + (tab.scroll === "edge" ? "selected" : "") + ">Edge</option><option value=\"off\" " + (tab.scroll === "off" ? "selected" : "") + ">OFF</option></select></div></div></header><div id=\"gridScroll\" class=\"grid-scroll" + ((tab.panelMode || "frames") === "frames" ? "" : " is-hidden") + "\"><div id=\"frameGrid\" class=\"frame-grid\"></div></div><div id=\"transcriptScroll\" class=\"transcript-scroll" + ((tab.panelMode || "frames") === "transcript" ? "" : " is-hidden") + "\"></div></aside>";
+  }
+  function sidePanelMarkup(tab) {
+    return baseSidePanelMarkup(tab)
+      .replace('</button></div><button id="transcriptAction"', '</button><button data-panel-mode="summary" class="' + (tab.panelMode === "summary" ? "active" : "") + '" title="Показать сводку" aria-label="Показать сводку">✦</button></div><button id="transcriptAction"')
+      .replace('</button></div><button id="transcriptAction"', '</button><button data-panel-mode="notes" class="' + (tab.panelMode === "notes" ? "active" : "") + '" title="Показать заметки" aria-label="Показать заметки">✎</button></div><button id="transcriptAction"')
+      .replace('</div></aside>', '</div><div id="summaryScroll" class="summary-scroll' + (tab.panelMode === "summary" ? '' : ' is-hidden') + '"></div><div id="notesScroll" class="notes-scroll' + (tab.panelMode === "notes" ? '' : ' is-hidden') + '"></div></aside>');
+  }
+  async function flushPlayerNotes(tab) {
+    clearTimeout(tab.notesSaveTimer);
+    if (tab.notesSavePromise) await tab.notesSavePromise;
+    if (!tab.notesDirty || tab.notesStatus !== "ready") return;
+    var filePath = tab.video.path;
+    var text = tab.notesText;
+    tab.notesSavePromise = window.folderVideo.saveNotes(filePath, text);
+    try {
+      var result = await tab.notesSavePromise;
+      if (result && result.error) throw new Error(result.error);
+      if (tab.video.path === filePath && tab.notesText === text) tab.notesDirty = false;
+      tab.notesError = "";
+    } catch (error) {
+      tab.notesError = error.message || String(error);
+      notice("Не удалось сохранить заметки: " + tab.notesError);
+    } finally {
+      tab.notesSavePromise = null;
+    }
+  }
+  function schedulePlayerNotesSave(tab) {
+    tab.notesDirty = true;
+    clearTimeout(tab.notesSaveTimer);
+    tab.notesSaveTimer = setTimeout(function() { flushPlayerNotes(tab); }, 650);
+  }
+  function renderNotesPanel(tab, player) {
+    var host = $("#notesScroll"); if (!host || active() !== tab) return;
+    if (tab.notesStatus === "loading") { host.innerHTML = '<p class="transcript-empty">Открываем заметки…</p>'; return; }
+    if (tab.notesStatus === "error") { host.innerHTML = '<p class="transcript-empty is-error">' + escapeHtml(tab.notesError) + '</p>'; return; }
+    var focused = document.activeElement && document.activeElement.id === "notesSource";
+    var source = host.querySelector("#notesSource");
+    if (!source) {
+      host.innerHTML = '<div class="notes-editor-head"><label class="notes-label" for="notesSource">Заметки по видео</label><button id="notesEditorToggle" class="notes-editor-toggle" type="button" aria-controls="notesEditorBody" aria-label="Развернуть редактор заметок" title="Развернуть редактор заметок" aria-expanded="false"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path d="m3.5 6 4.5 4 4.5-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div><div id="notesEditorBody" class="notes-editor-body"><textarea id="notesSource" class="notes-source" spellcheck="true" aria-label="Текст заметок по видео" title="Блоки вида [10:40], текст и разделитель ---" placeholder="[10:40]\nТекст заметки\n---"></textarea><div class="notes-help">Новый блок: [время], текст, затем --- на отдельной строке.</div></div><div class="notes-links" id="notesLinks"></div>';
+      source = host.querySelector("#notesSource");
+      host.querySelector("#notesEditorToggle").addEventListener("click", function() {
+        tab.notesEditorCollapsed = !tab.notesEditorCollapsed;
+        renderNotesPanel(tab, player);
+      });
+      source.addEventListener("input", function() {
+        tab.notesText = source.value;
+        schedulePlayerNotesSave(tab);
+        renderNoteLinks(tab, player);
+        if (player && player.paused) refreshVideoNote(tab, player, true);
+        else refreshVideoNote(tab, player, false);
+      });
+    }
+    if (!focused) source.value = tab.notesText || "";
+    host.classList.toggle("notes-editor-collapsed", !!tab.notesEditorCollapsed);
+    var toggle = host.querySelector("#notesEditorToggle");
+    toggle.setAttribute("aria-expanded", String(!tab.notesEditorCollapsed));
+    toggle.setAttribute("aria-label", tab.notesEditorCollapsed ? "Развернуть редактор заметок" : "Свернуть редактор заметок");
+    toggle.title = toggle.getAttribute("aria-label");
+    renderNoteLinks(tab, player);
+  }
+  function renderNoteLinks(tab, player) {
+    var host = $("#notesLinks"); if (!host || active() !== tab) return;
+    var notes = notesCore.parseNotes(tab.notesText).sort(function(first, second) { return first.start - second.start || first.blockIndex - second.blockIndex; });
+    host.innerHTML = notes.length ? '<h3>Переходы</h3>' + notes.map(function(note, index) {
+      var label = notesCore.formatNoteTime(note.start);
+      return '<button class="note-link" type="button" data-index="' + index + '" title="Перейти к ' + label + '" aria-label="Перейти к заметке на ' + label + '"><time>' + label + '</time><span>' + escapeHtml(note.text).replace(/\n/g, '<br>') + '</span></button>';
+    }).join('') : '<p class="transcript-empty">Заметок пока нет.</p>';
+    host.querySelectorAll(".note-link").forEach(function(button) {
+      button.addEventListener("click", function() {
+        var note = notes[Number(button.dataset.index)];
+        if (player && note) { player.currentTime = note.start; tab.currentTime = player.currentTime; player.play().catch(function() {}); focusPlaybackControl(); }
+      });
+    });
+  }
+  function focusPlaybackControl() {
+    var control = $("#togglePlayback");
+    if (control) control.focus({ preventScroll: true });
+  }
+  async function loadPlayerNotes(tab) {
+    if (tab.notesStatus) return;
+    var filePath = tab.video.path;
+    tab.notesStatus = "loading"; renderNotesPanel(tab, $("#player"));
+    try {
+      var result = await window.folderVideo.loadNotes(filePath);
+      if (tab.video.path !== filePath || !state.tabs.includes(tab)) return;
+      if (result && result.error) throw new Error(result.error);
+      tab.notesText = result.text || ""; tab.notesStatus = "ready"; tab.notesError = "";
+    } catch (error) {
+      if (tab.video.path !== filePath || !state.tabs.includes(tab)) return;
+      tab.notesStatus = "error"; tab.notesError = error.message || String(error);
+    }
+    renderNotesPanel(tab, $("#player"));
+    refreshVideoNote(tab, $("#player"), false);
+  }
+  function refreshVideoNote(tab, player, preserveInput) {
+    var field = $("#videoNote"); var time = $("#videoNoteTime");
+    if (!field || !time || !player || active() !== tab) return;
+    if (tab.notesStatus !== "ready") { field.disabled = true; field.value = ""; time.textContent = "Заметки"; return; }
+    field.disabled = false;
+    var seconds = Math.max(0, player.currentTime || 0);
+    var note = notesCore.activeNote(notesCore.parseNotes(tab.notesText), seconds);
+    if (player.paused && !player.ended) {
+      field.readOnly = false;
+      if (preserveInput && document.activeElement === field) return;
+      if (tab.noteEditStart !== (note ? note.start : Math.floor(seconds)) || tab.noteEditBlockIndex !== (note ? note.blockIndex : null)) {
+        tab.noteEditStart = note ? note.start : Math.floor(seconds);
+        tab.noteEditBlockIndex = note ? note.blockIndex : null;
+        field.value = note ? note.text : "";
+      } else if (document.activeElement !== field) field.value = note ? note.text : "";
+      time.textContent = "[" + notesCore.formatNoteTime(tab.noteEditStart) + "]";
+      field.placeholder = "Введите заметку для этого момента видео";
+    } else {
+      field.readOnly = true;
+      tab.noteEditStart = null; tab.noteEditBlockIndex = null;
+      field.value = note ? note.text : "";
+      time.textContent = note ? "[" + notesCore.formatNoteTime(note.start) + "]" : "Заметки";
+      field.placeholder = "Заметка появится здесь на 10 секунд видео";
+    }
+    field.closest(".video-note-box").classList.toggle("has-note", !!note);
+  }
+  function renderSummaryPanel(tab, player) {
+    var host = $("#summaryScroll"); if (!host || active() !== tab) return;
+    if (tab.summaryStatus === "loading") { host.innerHTML = '<p class="transcript-empty">Открываем сохранённую сводку…</p>'; return; }
+    if (tab.summaryStatus === "running") { host.innerHTML = '<p class="transcript-empty is-running">DeepSeek создаёт сводку…</p>'; return; }
+    if (tab.summaryError) { host.innerHTML = '<p class="transcript-empty is-error">' + escapeHtml(tab.summaryError) + '</p><button class="summary-retry" type="button">Повторить</button>'; host.querySelector("button").addEventListener("click", function() { startPlayerSummary(tab, true); }); return; }
+    if (!tab.summaryData) { host.innerHTML = '<p class="transcript-empty">' + (tab.transcriptSegments && tab.transcriptSegments.length ? 'Для сводки укажите ключ DeepSeek в настройках.' : 'Сначала транскрибируйте видео.') + '</p>'; return; }
+    var paragraphs = tab.summaryData.overview.split(/\n\s*\n/).map(function(value) { return '<p>' + escapeHtml(value).replace(/\n/g, '<br>') + '</p>'; }).join('');
+    var topics = tab.summaryData.topics.map(function(topic, index) { return '<button class="summary-topic" type="button" data-index="' + index + '" title="Перейти к ' + escapeHtml(formatTime(topic.start)) + '" aria-label="Перейти к теме ' + escapeHtml(topic.title) + ' на ' + escapeHtml(formatTime(topic.start)) + '"><time>' + formatTime(topic.start) + '</time><span><strong>' + escapeHtml(topic.title) + '</strong>' + (topic.description ? '<small>' + escapeHtml(topic.description) + '</small>' : '') + '</span></button>'; }).join('');
+    host.innerHTML = '<div class="summary-head"><h2>Сводка</h2><button class="summary-retry" type="button" title="Создать сводку заново" aria-label="Создать сводку заново">↻</button></div><div class="summary-overview">' + paragraphs + '</div><h3>Основные темы</h3>' + (topics || '<p class="transcript-empty">Темы не выделены.</p>');
+    host.querySelector(".summary-retry").addEventListener("click", function() { startPlayerSummary(tab, true); });
+    host.querySelectorAll(".summary-topic").forEach(function(button) { button.addEventListener("click", function() { var topic = tab.summaryData.topics[Number(button.dataset.index)]; if (player && topic) { player.currentTime = topic.start; tab.currentTime = player.currentTime; player.play().catch(function() {}); focusPlaybackControl(); } }); });
+  }
+  async function loadPlayerSummary(tab) {
+    if (tab.summaryStatus === "running" || tab.summaryStatus === "loading") return;
+    var filePath = tab.video.path;
+    tab.summaryStatus = "loading"; tab.summaryError = ""; renderSummaryPanel(tab, $("#player"));
+    var result = await window.folderVideo.loadSummary(filePath);
+    if (tab.video.path !== filePath || !state.tabs.includes(tab)) return;
+    if (result.available) { tab.summaryData = result.summary; tab.summaryStatus = "ready"; }
+    else if (result.error) { tab.summaryError = result.error; tab.summaryStatus = "error"; }
+    else if (tab.transcriptSegments && tab.transcriptSegments.length && state.settings.ai.keyConfigured) { startPlayerSummary(tab, false); return; }
+    else tab.summaryStatus = "ready";
+    renderSummaryPanel(tab, $("#player"));
+  }
+  async function startPlayerSummary(tab, force) {
+    if (!tab.transcriptSegments || !tab.transcriptSegments.length) { tab.summaryError = "Сначала транскрибируйте видео."; renderSummaryPanel(tab, $("#player")); return; }
+    if (!state.settings.ai.keyConfigured) { tab.summaryError = "Укажите ключ DeepSeek в настройках."; renderSummaryPanel(tab, $("#player")); return; }
+    if (tab.summaryStatus === "running") return;
+    var filePath = tab.video.path;
+    tab.summaryStatus = "running"; tab.summaryError = ""; renderSummaryPanel(tab, $("#player"));
+    var result = await window.folderVideo.startSummary(filePath, force === true);
+    if (tab.video.path !== filePath || !state.tabs.includes(tab) || tab.summaryStatus !== "running") return;
+    if (result.error) { tab.summaryStatus = "error"; tab.summaryError = result.error; }
+    else { tab.summaryStatus = "ready"; tab.summaryData = result.summary; }
+    renderSummaryPanel(tab, $("#player"));
   }
   function renderTranscriptPanel(tab, player) {
     var host = $("#transcriptScroll"); if (!host || active() !== tab) return;
@@ -965,17 +1137,18 @@
     if (tab.transcriptError) { host.innerHTML = "<p class=\"transcript-empty is-error\">" + escapeHtml(tab.transcriptError) + "</p>"; return; }
     if (!tab.transcriptSegments || !tab.transcriptSegments.length) { host.innerHTML = "<p class=\"transcript-empty\">Транскрипции пока нет.<br>Нажмите кнопку транскрибации в шапке панели.</p>"; return; }
     host.innerHTML = tab.transcriptSegments.map(function(segment, index) { return "<button class=\"transcript-segment\" data-index=\"" + index + "\" data-start=\"" + segment.start + "\" data-end=\"" + segment.end + "\"><time>" + formatTime(segment.start) + "</time><span>" + escapeHtml(segment.text) + "</span></button>"; }).join("");
-    host.querySelectorAll(".transcript-segment").forEach(function(button) { button.addEventListener("click", function() { player.currentTime = Number(button.dataset.start); tab.currentTime = player.currentTime; player.play().catch(function() {}); updateActiveTranscript(player.currentTime, tab, true); }); });
+    host.querySelectorAll(".transcript-segment").forEach(function(button) { button.addEventListener("click", function() { player.currentTime = Number(button.dataset.start); tab.currentTime = player.currentTime; player.play().catch(function() {}); updateActiveTranscript(player.currentTime, tab, true); focusPlaybackControl(); }); });
     updateActiveTranscript(player.currentTime, tab, false);
   }
   async function loadPlayerTranscript(tab) {
     var filePath = tab.video.path;
     tab.transcriptStatus = "loading"; tab.transcriptError = ""; renderTranscriptPanel(tab, $("#player"));
     var result = await window.folderVideo.loadTranscript(filePath);
-    if (active() !== tab || tab.video.path !== filePath) return;
+    if (!state.tabs.includes(tab) || tab.video.path !== filePath) return;
     if (result.error) { tab.transcriptError = result.error; tab.transcriptStatus = "error"; }
     else { tab.transcriptSegments = result.available ? parseSrt(result.srt) : []; tab.transcriptStatus = "ready"; tab.transcriptStale = Boolean(result.stale); }
     renderTranscriptPanel(tab, $("#player")); updateTranscriptControls(tab);
+    if (result.available && tab.transcriptSegments.length) loadPlayerSummary(tab);
   }
   function updateTranscriptControls(tab) {
     var button = $("#transcriptAction"); if (!button || active() !== tab) return;
@@ -996,7 +1169,11 @@
     if (tab.video.path !== filePath) return;
     if (result.canceled) { tab.transcriptStatus = "ready"; updateTranscriptControls(tab); return; }
     if (result.error) { tab.transcriptStatus = "error"; tab.transcriptError = result.error; updateTranscriptControls(tab); return; }
-    tab.transcriptSegments = parseSrt(result.srt || ""); tab.transcriptStatus = "ready"; tab.transcriptStale = false; updateTranscriptControls(tab); notice("Транскрипция готова", true);
+    tab.transcriptSegments = parseSrt(result.srt || ""); tab.transcriptStatus = "ready"; tab.transcriptStale = false; tab.summaryData = null; tab.summaryStatus = null; tab.summaryError = ""; updateTranscriptControls(tab); notice("Транскрипция готова", true);
+    if (tab.transcriptSegments.length) {
+      if (state.settings.ai.keyConfigured) startPlayerSummary(tab, true);
+      else renderSummaryPanel(tab, $("#player"));
+    }
   }
   function updateActiveTranscript(time, tab, shouldScroll) {
     if ((tab.panelMode || "frames") !== "transcript" || !tab.transcriptSegments) return;
@@ -1007,10 +1184,10 @@
     if (previous !== next) { if (previous) previous.classList.remove("active"); if (next) { next.classList.add("active"); if (shouldScroll) next.scrollIntoView({ block: "nearest" }); } }
   }
   function setPlayerPanelMode(tab, player) {
-    var mode = tab.panelMode || "frames"; var frames = $("#gridScroll"); var transcript = $("#transcriptScroll"); var controls = $("#frameControls");
-    if (frames) frames.classList.toggle("is-hidden", mode !== "frames"); if (transcript) transcript.classList.toggle("is-hidden", mode !== "transcript"); if (controls) controls.classList.toggle("is-hidden", mode !== "frames");
+    var mode = tab.panelMode || "frames"; var frames = $("#gridScroll"); var transcript = $("#transcriptScroll"); var summary = $("#summaryScroll"); var notes = $("#notesScroll"); var controls = $("#frameControls");
+    if (frames) frames.classList.toggle("is-hidden", mode !== "frames"); if (transcript) transcript.classList.toggle("is-hidden", mode !== "transcript"); if (summary) summary.classList.toggle("is-hidden", mode !== "summary"); if (notes) notes.classList.toggle("is-hidden", mode !== "notes"); if (controls) controls.classList.toggle("is-hidden", mode !== "frames");
     document.querySelectorAll("[data-panel-mode]").forEach(function(button) { button.classList.toggle("active", button.dataset.panelMode === mode); });
-    if (mode === "transcript") renderTranscriptPanel(tab, player); else if (player && Number.isFinite(player.duration) && !$("#frameGrid").children.length) renderFrameGrid(tab, player);
+    if (mode === "transcript") renderTranscriptPanel(tab, player); else if (mode === "summary") renderSummaryPanel(tab, player); else if (mode === "notes") renderNotesPanel(tab, player); else if (player && Number.isFinite(player.duration) && !$("#frameGrid").children.length) renderFrameGrid(tab, player);
   }
   function renderPlayer(tab) { var gs = "";
     var playbackRate = tab.playbackRate || 1;
@@ -1020,6 +1197,7 @@
     var favorite = isFavorite(tab.video.path);
     view.innerHTML = "<section class=\"player-view\"><div class=\"player-layout\"" + gs + "\"><div class=\"player-main\"><div class=\"video-bar\"><button id=\"back\" class=\"back\">◀ VIDEO LIST</button><span id=\"reveal\" class=\"video-path\" title=\"Открыть в Проводнике\">" + escapeHtml(tab.video.path) + "</span><button id=\"videoScreenshot\" class=\"video-action\" title=\"Сохранить скрин текущего кадра\" aria-label=\"Сохранить скрин текущего кадра\">SHOT</button><button id=\"copyVideoName\" class=\"video-action\" title=\"Скопировать название файла без расширения\" aria-label=\"Скопировать название файла без расширения\">COPY</button><button id=\"openExternal\" class=\"open-external\" title=\"Открыть в системном плеере\" aria-label=\"Открыть в системном плеере\">▶</button></div><div class=\"video-stage\"><video id=\"player\" controls playsinline src=\"" + tab.video.url + "\"></video><nav class=\"video-switcher\" aria-label=\"Управление воспроизведением и переключение видео\"><button id=\"previousVideo\" type=\"button\" title=\"Предыдущее видео\" aria-label=\"Предыдущее видео\" " + (prevDisabled ? "disabled" : "") + ">‹ Prev</button><button id=\"togglePlayback\" class=\"toggle-playback\" type=\"button\" title=\"Воспроизвести (Space)\" aria-label=\"Воспроизвести\" aria-pressed=\"false\"><span aria-hidden=\"true\">▶</span></button><button id=\"nextVideo\" type=\"button\" title=\"Следующее видео\" aria-label=\"Следующее видео\" " + (nextDisabled ? "disabled" : "") + ">Next ›</button></nav></div></div><aside id=\"gridPanel\" class=\"grid-panel" + (tab.collapsed ? " collapsed" : "") + "\"><header class=\"grid-head\"><button id=\"collapse\" class=\"collapse\" title=\"Свернуть панель\">" + (tab.collapsed ? "◀" : "▶") + "</button><div class=\"grid-control\"><label>Col</label><select id=\"columns\">" + [3,4,5,6,8].map(function(v) { return "<option " + (v === tab.columns ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Sec</label><select id=\"seconds\">" + [5,10,15,30,60].map(function(v) { return "<option " + (v === tab.seconds ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Scroll</label><select id=\"scroll\"><option value=\"center\" " + (tab.scroll === "center" ? "selected" : "") + ">Center</option><option value=\"edge\" " + (tab.scroll === "edge" ? "selected" : "") + ">Edge</option><option value=\"off\" " + (tab.scroll === "off" ? "selected" : "") + ">OFF</option></select></div></header><div id=\"gridScroll\" class=\"grid-scroll\"><div id=\"frameGrid\" class=\"frame-grid\"></div></div></aside></div><footer class=\"player-status\">Пробел — пуск/пауза · Стрелки — перемещение маркера · Клик/перетаскивание — точный переход</footer></section>";
     $("#gridPanel").outerHTML = sidePanelMarkup(tab);
+    $(".video-switcher").insertAdjacentHTML("afterend", '<div class="video-note-box"><label for="videoNote" id="videoNoteTime">Заметки</label><textarea id="videoNote" aria-label="Заметка к текущему моменту видео" title="На паузе можно записать заметку" readonly></textarea></div>');
     var favoriteButton = document.createElement("button");
     favoriteButton.id = "playerFavorite";
     favoriteButton.className = "favorite-toggle" + (favorite ? " is-favorite" : "");
@@ -1059,7 +1237,7 @@
     transcriptButton.setAttribute("aria-label", transcriptButton.title);
     transcriptButton.innerHTML = transcriptIconMarkup();
     $("#playerDelete").before(transcriptButton);
-    var layout = $(".player-layout"); layout.insertAdjacentHTML("afterbegin", metadataPanelMarkup(tab)); layout.classList.toggle("metadata-collapsed", tab.metadataCollapsed); layout.classList.toggle("grid-collapsed", tab.collapsed);
+    var layout = $(".player-layout"); layout.insertAdjacentHTML("afterbegin", metadataPanelMarkup(tab)); layout.classList.toggle("metadata-collapsed", tab.metadataCollapsed); layout.classList.toggle("grid-collapsed", tab.collapsed); layout.style.setProperty("--grid-panel-width", (tab.panelWidth || 410) + "px");
     var player = $("#player"); player.currentTime = tab.currentTime || 0; player.playbackRate = playbackRate;
     var playbackRates = document.createElement("span");
     playbackRates.className = "playback-rates";
@@ -1075,7 +1253,7 @@
       playbackRates.appendChild(rateButton);
     });
     $(".video-switcher").appendChild(playbackRates);
-    $("#back").addEventListener("click", function() { state.activeTab = "folder"; render(); });
+    $("#back").addEventListener("click", function() { flushPlayerNotes(tab); state.activeTab = "folder"; render(); });
     $("#reveal").addEventListener("click", function() { window.folderVideo.showInFolder(tab.video.path); });
     $("#playerFavorite").addEventListener("click", function() { toggleFavorite(tab.video); renderPlayer(tab); });
     $("#playerMove").addEventListener("click", function() { moveFile(tab.video.path); });
@@ -1095,9 +1273,18 @@
       togglePlayback.firstElementChild.textContent = playing ? "❚❚" : "▶";
     }
     togglePlayback.addEventListener("click", function() { player.paused ? player.play().catch(function() {}) : player.pause(); });
-    player.addEventListener("play", updatePlaybackButton);
-    player.addEventListener("pause", updatePlaybackButton);
+    player.addEventListener("play", function() { updatePlaybackButton(); refreshVideoNote(tab, player, false); flushPlayerNotes(tab); });
+    player.addEventListener("pause", function() { updatePlaybackButton(); refreshVideoNote(tab, player, false); });
     player.addEventListener("ended", updatePlaybackButton);
+    $("#videoNote").addEventListener("input", function(event) {
+      if (!player.paused || tab.notesStatus !== "ready") return;
+      var text = event.target.value;
+      tab.notesText = notesCore.upsertNote(tab.notesText, tab.noteEditStart, text, tab.noteEditBlockIndex);
+      var edited = notesCore.parseNotes(tab.notesText).filter(function(note) { return note.start === tab.noteEditStart && note.text === text.trim(); });
+      tab.noteEditBlockIndex = edited.length ? edited[edited.length - 1].blockIndex : null;
+      schedulePlayerNotesSave(tab);
+      renderNotesPanel(tab, player);
+    });
     $("#previousVideo").addEventListener("click", function() { switchPlayerVideo(tab, -1); });
     $("#nextVideo").addEventListener("click", function() { switchPlayerVideo(tab, 1); });
     document.querySelectorAll(".playback-rate").forEach(function(button) {
@@ -1113,6 +1300,30 @@
     });
     $("#metadataCollapse").addEventListener("click", function() { tab.metadataCollapsed = !tab.metadataCollapsed; state.metadataCollapsed = tab.metadataCollapsed; savePanelPreferences(); renderPlayer(tab); });
     $("#collapse").addEventListener("click", function() { tab.collapsed = !tab.collapsed; state.gridCollapsed = tab.collapsed; savePanelPreferences(); renderPlayer(tab); });
+    var panelResizer = $("#panelResizer");
+    panelResizer.addEventListener("pointerdown", function(event) {
+      if (tab.collapsed) return;
+      event.preventDefault(); panelResizer.setPointerCapture(event.pointerId);
+      var startX = event.clientX; var startWidth = tab.panelWidth || 410;
+      function resize(moveEvent) {
+        var layoutWidth = layout.clientWidth; var leftWidth = tab.metadataCollapsed ? 42 : 280;
+        var maxWidth = Math.max(280, Math.min(720, layoutWidth - leftWidth - 430));
+        tab.panelWidth = Math.max(280, Math.min(maxWidth, startWidth + startX - moveEvent.clientX));
+        layout.style.setProperty("--grid-panel-width", tab.panelWidth + "px");
+        panelResizer.setAttribute("aria-valuenow", String(Math.round(tab.panelWidth)));
+        state.settings.viewer.panelWidth = Math.round(tab.panelWidth);
+        state.tabs.filter(function(item) { return item.type === "player"; }).forEach(function(item) { item.panelWidth = tab.panelWidth; });
+      }
+      function finish() { panelResizer.removeEventListener("pointermove", resize); panelResizer.removeEventListener("pointerup", finish); panelResizer.removeEventListener("pointercancel", finish); savePanelPreferences(); }
+      panelResizer.addEventListener("pointermove", resize); panelResizer.addEventListener("pointerup", finish); panelResizer.addEventListener("pointercancel", finish);
+    });
+    panelResizer.addEventListener("keydown", function(event) {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault(); var delta = event.key === "ArrowLeft" ? 16 : -16;
+      tab.panelWidth = Math.max(280, Math.min(720, (tab.panelWidth || 410) + delta));
+      state.settings.viewer.panelWidth = tab.panelWidth; layout.style.setProperty("--grid-panel-width", tab.panelWidth + "px");
+      panelResizer.setAttribute("aria-valuenow", String(tab.panelWidth)); savePanelPreferences();
+    });
     document.querySelectorAll("[data-panel-mode]").forEach(function(button) { button.addEventListener("click", function() { tab.panelMode = button.dataset.panelMode; setPlayerPanelMode(tab, player); }); });
     $("#transcriptAction").addEventListener("click", function() { startPlayerTranscript(tab); });
     $("#columns").addEventListener("change", function(event) {
@@ -1127,19 +1338,26 @@
     });
     $("#scroll").addEventListener("change", function(event) { tab.scroll = event.target.value; });
     renderMetadataContent(tab); if (!tab.metadata && tab.metadataStatus === "idle") loadMetadata(tab);
-    if (!tab.transcriptStatus) loadPlayerTranscript(tab); else renderTranscriptPanel(tab, player);
+    if (!tab.transcriptStatus) loadPlayerTranscript(tab);
+    else { renderTranscriptPanel(tab, player); if (!tab.summaryStatus && tab.transcriptSegments.length) loadPlayerSummary(tab); else renderSummaryPanel(tab, player); }
+    if (!tab.notesStatus) loadPlayerNotes(tab); else { renderNotesPanel(tab, player); refreshVideoNote(tab, player, false); }
     player.addEventListener("loadedmetadata", function() {
       if (!Number.isFinite(player.duration) || !player.duration) { notice("Этот файл не удаётся декодировать в Chromium."); return; }
       renderFrameGrid(tab, player);
     });
-    player.addEventListener("timeupdate", function() { tab.currentTime = player.currentTime; updateActiveFrame(player.currentTime, tab, !tab.isDragging); updateActiveTranscript(player.currentTime, tab, true); });
-    player.addEventListener("seeked", function() { tab.currentTime = player.currentTime; updateActiveFrame(player.currentTime, tab, !tab.isDragging); updateActiveTranscript(player.currentTime, tab, true); });
+    player.addEventListener("timeupdate", function() { tab.currentTime = player.currentTime; updateActiveFrame(player.currentTime, tab, !tab.isDragging); updateActiveTranscript(player.currentTime, tab, true); refreshVideoNote(tab, player, true); });
+    player.addEventListener("seeked", function() { tab.currentTime = player.currentTime; updateActiveFrame(player.currentTime, tab, !tab.isDragging); updateActiveTranscript(player.currentTime, tab, true); refreshVideoNote(tab, player, false); });
     document.onkeydown = function(event) { keyboardPlayer(event, tab, player); };
   }
   function keyboardPlayer(event, tab, player) {
     if (active().id !== tab.id || ["SELECT", "INPUT", "TEXTAREA"].indexOf(document.activeElement.tagName) !== -1) return;
     var step = tab.seconds; var target = null;
-    if (event.key === " ") { event.preventDefault(); player.paused ? player.play().catch(function() {}) : player.pause(); }
+    if (event.key === " ") {
+      if (event.repeat) { event.preventDefault(); return; }
+      if (event.target instanceof Element && event.target.closest("button, a, [role='button'], video")) return;
+      event.preventDefault();
+      player.paused ? player.play().catch(function() {}) : player.pause();
+    }
     if (event.key === "ArrowLeft") target = player.currentTime - step;
     if (event.key === "ArrowRight") target = player.currentTime + step;
     if (event.key === "Home") target = 0;
