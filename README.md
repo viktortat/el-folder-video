@@ -32,6 +32,7 @@ Resize the frame and transcript sidebar by dragging its left edge. The app saves
 ## Install and start
 
 If you have received `folder-video-setup.exe`, run it and follow the Windows installer. It creates Start menu and desktop shortcuts.
+If the pinned Start menu tile shows a blank page after an update, unpin that tile and pin Folder-video again from the app list.
 
 To build the installer from source, use the instructions in the [technical documentation](docs/README.md). The portable build is a folder at `out\\folder-video-win32-x64`; keep its files together and run `folder-video.exe` from that folder.
 

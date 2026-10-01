@@ -118,6 +118,8 @@ async function saveSettings(settings) {
 
 if (require('electron-squirrel-startup')) app.quit();
 
+// Match the AppUserModelID written by Squirrel into Start menu and taskbar shortcuts.
+app.setAppUserModelId('com.squirrel.folder_video.folder-video');
 Menu.setApplicationMenu(null);
 
 function createWindow() {
@@ -128,7 +130,7 @@ function createWindow() {
     minWidth: 980,
     minHeight: 640,
     title: APP_TITLE,
-    icon: nativeImage.createFromPath(path.join(__dirname, 'assets', 'folder-video.ico')),
+    icon: nativeImage.createFromPath(path.join(__dirname, 'assets', 'folder-video.png')),
     backgroundColor: '#101216',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
