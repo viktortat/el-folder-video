@@ -1253,6 +1253,15 @@
       playbackRates.appendChild(rateButton);
     });
     $(".video-switcher").appendChild(playbackRates);
+    var playbackTime = document.createElement("span");
+    playbackTime.id = "playbackTime";
+    playbackTime.className = "playback-time";
+    playbackTime.title = "Текущее время / длительность";
+    playbackTime.setAttribute("aria-label", "Текущее время и длительность видео");
+    $(".video-switcher").prepend(playbackTime);
+    function updatePlaybackTime() { playbackTime.textContent = formatTime(player.currentTime || 0) + " / " + formatTime(player.duration); }
+    updatePlaybackTime();
+    ["loadedmetadata", "durationchange", "timeupdate", "seeked", "emptied"].forEach(function(name) { player.addEventListener(name, updatePlaybackTime); });
     $("#back").addEventListener("click", function() { flushPlayerNotes(tab); state.activeTab = "folder"; render(); });
     $("#reveal").addEventListener("click", function() { window.folderVideo.showInFolder(tab.video.path); });
     $("#playerFavorite").addEventListener("click", function() { toggleFavorite(tab.video); renderPlayer(tab); });

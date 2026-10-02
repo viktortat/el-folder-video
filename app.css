@@ -44,6 +44,8 @@ body.light .recent-folder:hover { border-color:var(--accent); background:var(--p
 .video-switcher .toggle-playback span { font-size:12px; line-height:1; }
 .video-switcher .toggle-playback.is-playing span { font-size:10px; letter-spacing:1px; }
 .playback-rates { position:absolute; right:0; display:flex; gap:5px; }
+.playback-time { position:absolute; left:0; font:13px "DM Mono",monospace; color:#c8d3e4; font-variant-numeric:tabular-nums; white-space:nowrap; }
+body.light .playback-time { color:#4c5d75; }
 .video-switcher .playback-rate { min-width:38px; width:38px; padding:0; text-transform:none; }
 .video-switcher .playback-rate.is-active { border-color:#9b7cff; background:#49356f; color:#fff; box-shadow:0 0 0 1px rgba(155,124,255,.24),0 8px 20px rgba(0,0,0,.22); }
 
