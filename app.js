@@ -309,7 +309,9 @@
     return [].concat(state.files).sort(function(a, b) {
       var result = state.sort === "name"
         ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })
-        : a.lastModified - b.lastModified;
+        : state.sort === "size"
+          ? a.size - b.size
+          : a.lastModified - b.lastModified;
       return state.asc ? result : -result;
     });
   }
@@ -556,7 +558,7 @@
         "<label class=\"recent-days-filter\" title=\"Показывать видео, изменённые за указанное число дней\"><input id=\"recentDaysEnabled\" type=\"checkbox\" " + (state.recentDaysEnabled ? "checked" : "") + "/> За <input id=\"recentDays\" type=\"number\" min=\"1\" max=\"36500\" step=\"1\" value=\"" + state.recentDays + "\" inputmode=\"numeric\" aria-label=\"Количество дней для фильтра\" /> дней</label>" +
         "<div class=\"scan-options\"><label class=\"check\"><input id=\"recursive\" type=\"checkbox\" " + (state.recursive ? "checked" : "") + "/> Recursive</label>" +
         "<label class=\"check\" title=\"Скрыть видеофайлы с размером 0 КБ\"><input id=\"hideEmptyFiles\" type=\"checkbox\" " + (state.hideEmptyFiles ? "checked" : "") + "/> Не 0 КБ</label></div>" +
-        "<div class=\"sort\"><span>Sort</span><select id=\"sort\"><option value=\"date\" " + (state.sort === "date" ? "selected" : "") + ">Date</option><option value=\"name\" " + (state.sort === "name" ? "selected" : "") + ">Name</option></select><button id=\"direction\" title=\"Изменить направление\">" + (state.asc ? "▲" : "▼") + "</button></div>" +
+        "<div class=\"sort\"><span>Sort</span><select id=\"sort\" title=\"Сортировать видео по дате, имени или размеру файла\" aria-label=\"Сортировать видео по дате, имени или размеру файла\"><option value=\"date\" " + (state.sort === "date" ? "selected" : "") + ">Date</option><option value=\"name\" " + (state.sort === "name" ? "selected" : "") + ">Name</option><option value=\"size\" " + (state.sort === "size" ? "selected" : "") + ">Size</option></select><button id=\"direction\" title=\"Изменить направление\">" + (state.asc ? "▲" : "▼") + "</button></div>" +
         "<span class=\"count\">" + files.length + (state.filterText || state.favoritesOnly || state.hideEmptyFiles || state.recentDaysEnabled ? " / " + state.files.length : "") + " videos</span>" +
       "</header>" +
       "<div id=\"folderContent\" class=\"folder-content\">" + (rows.length ? rows.map(function(v) { return rowMarkup(v); }).join("") + pagination(pages) : emptyMarkup()) + "</div>" +
