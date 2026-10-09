@@ -5,10 +5,11 @@
   const notesCore = window.NotesCore;
   const thumbnailQueue = new ThumbnailQueue(2);
   const supported = "MP4, WebM, MOV, AVI, MKV, M4V, OGV";
-  const DEFAULT_SETTINGS = { version: 1, theme: "dark", storage: { metadataDirectory: "", gitRepositoryUrl: "" }, viewer: { columns: 3, seconds: 10, scroll: "center", panelWidth: 410 }, interface: { metadataCollapsed: false, gridCollapsed: false }, transcription: { modelPath: "" }, ai: { model: "deepseek-flash", apiKey: "", keyConfigured: false, clearKey: false } };
+  const DEFAULT_SETTINGS = { version: 1, theme: "dark", storage: { metadataDirectory: "", gitRepositoryUrl: "", obsidianInbox: "" }, viewer: { columns: 3, seconds: 10, scroll: "center", panelWidth: 410 }, interface: { metadataCollapsed: false, gridCollapsed: false }, transcription: { modelPath: "" }, ai: { model: "deepseek-flash", apiKey: "", keyConfigured: false, clearKey: false } };
   const SETTINGS_FIELDS = [
     { group: "Хранилище", key: "storage.metadataDirectory", label: "Каталог метаданных", type: "text", hint: "JSON-файлы и template.html" },
     { group: "Хранилище", key: "storage.gitRepositoryUrl", label: "Git-репозиторий", type: "text", hint: "URL удалённого репозитория" },
+    { group: "Хранилище", key: "storage.obsidianInbox", label: "Папка статей Obsidian", type: "text", hint: "Сюда кнопка в шапке панели сохраняет сводную статью по видео" },
     { group: "Транскрибация", key: "transcription.modelPath", label: "Модель Parakeet TDT", type: "text", hint: "Путь к GGUF-файлу; пустое значение — поиск в кэше HuggingFace" },
     { group: "Суммаризация", key: "ai.apiKey", label: "Ключ DeepSeek", type: "password", hint: "Текст транскрипции отправляется в DeepSeek. Ключ шифруется; пустое поле оставляет прежний." },
     { group: "Суммаризация", key: "ai.model", label: "Название модели", type: "text", hint: "По умолчанию deepseek-flash" },
@@ -59,7 +60,7 @@
   function formatSize(bytes) { if (bytes < 1024) return bytes + " B"; if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB"; if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB"; return (bytes / 1073741824).toFixed(2) + " GB"; }
   function formatDate(value) { return new Date(value).toLocaleString([], { year: "2-digit", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }); }
   function formatTime(value) { if (!Number.isFinite(value)) return "—"; const h = Math.floor(value / 3600); const m = Math.floor((value % 3600) / 60); const s = Math.floor(value % 60); return h ? h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0") : m + ":" + String(s).padStart(2, "0"); }
-  function notice(message, info) { if (info === undefined) info = false; toastEl.textContent = message; toastEl.className = "toast show" + (info ? " info" : ""); clearTimeout(toastTimer); toastTimer = setTimeout(function() { toastEl.className = "toast"; }, 3900); }
+  function notice(message, info, onClick) { if (info === undefined) info = false; toastEl.textContent = message; toastEl.className = "toast show" + (info ? " info" : "") + (onClick ? " clickable" : ""); toastEl.onclick = onClick ? function() { toastEl.className = "toast"; onClick(); } : null; if (onClick) { toastEl.title = "Открыть в Obsidian"; toastEl.setAttribute("role", "button"); } else { toastEl.removeAttribute("title"); toastEl.removeAttribute("role"); } clearTimeout(toastTimer); toastTimer = setTimeout(function() { toastEl.className = "toast"; }, onClick ? 9000 : 3900); }
   function fileKey(video) { return video.path + "|" + video.size + "|" + video.lastModified; }
   function active() { return state.tabs.find(function(tab) { return tab.id === state.activeTab; }); }
   function savePanelPreferences() {
@@ -981,6 +982,7 @@
     return baseSidePanelMarkup(tab)
       .replace('</button></div><button id="transcriptAction"', '</button><button data-panel-mode="summary" class="' + (tab.panelMode === "summary" ? "active" : "") + '" title="Показать сводку" aria-label="Показать сводку">✦</button></div><button id="transcriptAction"')
       .replace('</button></div><button id="transcriptAction"', '</button><button data-panel-mode="notes" class="' + (tab.panelMode === "notes" ? "active" : "") + '" title="Показать заметки" aria-label="Показать заметки">✎</button></div><button id="transcriptAction"')
+      .replace('<button id="transcriptAction"', '<div class="obsidian-split"><button id="obsidianExport" class="transcript-action obsidian-main" title="Пересоздать статью в Obsidian" aria-label="Пересоздать статью в Obsidian"><svg class="transcript-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h6"/></svg></button><button id="obsidianMenuToggle" class="transcript-action obsidian-caret" type="button" title="Действия со статьёй" aria-label="Действия со статьёй" aria-haspopup="menu" aria-expanded="false"><svg class="transcript-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg></button><div id="obsidianMenu" class="obsidian-menu is-hidden" role="menu"><button type="button" role="menuitem" data-article-action="append" title="Добавить текущую сводку в конец статьи" aria-label="Дополнить статью">Дополнить статью</button><button type="button" role="menuitem" data-article-action="open" title="Открыть статью в Obsidian" aria-label="Открыть статью">Открыть статью</button></div></div><button id="transcriptAction"')
       .replace('</div></aside>', '</div><div id="summaryScroll" class="summary-scroll' + (tab.panelMode === "summary" ? '' : ' is-hidden') + '"></div><div id="notesScroll" class="notes-scroll' + (tab.panelMode === "notes" ? '' : ' is-hidden') + '"></div></aside>');
   }
   async function flushPlayerNotes(tab) {
@@ -1120,6 +1122,30 @@
     else tab.summaryStatus = "ready";
     renderSummaryPanel(tab, $("#player"));
   }
+  async function openSummaryArticle(tab) {
+    var info = await window.folderVideo.getObsidianArticle(tab.video.path);
+    if (!info.exists) { notice("Статья ещё не создана: нажмите кнопку, чтобы создать её."); return; }
+    window.folderVideo.openMetadataLink("obsidian://open?path=" + encodeURIComponent(info.path));
+  }
+  async function exportSummaryArticle(tab, mode) {
+    if (tab.obsidianBusy) return;
+    if (!tab.summaryData) { notice(tab.summaryStatus === "running" ? "Дождитесь завершения сводки." : "Сначала создайте сводку: нужны транскрипция и ключ DeepSeek."); return; }
+    if (mode !== "append") {
+      var existing = await window.folderVideo.getObsidianArticle(tab.video.path);
+      if (existing.exists && !window.confirm("Статья уже существует:\n" + existing.path + "\n\nПерезаписать её и скриншоты? Ручные правки в статье будут потеряны.")) return;
+      if (tab.obsidianBusy) return;
+    }
+    var filePath = tab.video.path; var player = $("#player"); var button = $("#obsidianExport");
+    var duration = player && player.src && Number.isFinite(player.duration) ? player.duration : (state.durationCache.get(fileKey(tab.video)) || 0);
+    tab.obsidianBusy = true; if (button) { button.disabled = true; button.classList.add("is-running"); }
+    notice(mode === "append" ? "Дополняем статью в Obsidian…" : "Создаём статью в Obsidian…", true);
+    try {
+      var result = await window.folderVideo.exportSummaryToObsidian(filePath, duration, mode || "create");
+      if (result.error) notice("Не удалось создать статью: " + result.error);
+      else notice((result.appended ? "Статья дополнена. " : result.warning ? "Статья сохранена. " + result.warning + " " : "Статья сохранена в Obsidian: " + result.path + " ") + "Нажмите, чтобы открыть.", !result.warning, function() { window.folderVideo.openMetadataLink("obsidian://open?path=" + encodeURIComponent(result.path)); });
+    } catch (error) { notice("Не удалось создать статью: " + (error.message || error)); }
+    finally { tab.obsidianBusy = false; var current = $("#obsidianExport"); if (current && active() === tab) { current.disabled = false; current.classList.remove("is-running"); } }
+  }
   async function startPlayerSummary(tab, force) {
     if (!tab.transcriptSegments || !tab.transcriptSegments.length) { tab.summaryError = "Сначала транскрибируйте видео."; renderSummaryPanel(tab, $("#player")); return; }
     if (!state.settings.ai.keyConfigured) { tab.summaryError = "Укажите ключ DeepSeek в настройках."; renderSummaryPanel(tab, $("#player")); return; }
@@ -1197,7 +1223,7 @@
     var prevDisabled = videoIndex <= 0;
     var nextDisabled = videoIndex === -1 || videoIndex >= playerVideoList().length - 1;
     var favorite = isFavorite(tab.video.path);
-    view.innerHTML = "<section class=\"player-view\"><div class=\"player-layout\"" + gs + "\"><div class=\"player-main\"><div class=\"video-bar\"><button id=\"back\" class=\"back\">◀ VIDEO LIST</button><span id=\"reveal\" class=\"video-path\" title=\"Открыть в Проводнике\">" + escapeHtml(tab.video.path) + "</span><button id=\"videoScreenshot\" class=\"video-action\" title=\"Сохранить скрин текущего кадра\" aria-label=\"Сохранить скрин текущего кадра\">SHOT</button><button id=\"copyVideoName\" class=\"video-action\" title=\"Скопировать название файла без расширения\" aria-label=\"Скопировать название файла без расширения\">COPY</button><button id=\"openExternal\" class=\"open-external\" title=\"Открыть в системном плеере\" aria-label=\"Открыть в системном плеере\">▶</button></div><div class=\"video-stage\"><video id=\"player\" controls playsinline src=\"" + tab.video.url + "\"></video><nav class=\"video-switcher\" aria-label=\"Управление воспроизведением и переключение видео\"><button id=\"previousVideo\" type=\"button\" title=\"Предыдущее видео\" aria-label=\"Предыдущее видео\" " + (prevDisabled ? "disabled" : "") + ">‹ Prev</button><button id=\"togglePlayback\" class=\"toggle-playback\" type=\"button\" title=\"Воспроизвести (Space)\" aria-label=\"Воспроизвести\" aria-pressed=\"false\"><span aria-hidden=\"true\">▶</span></button><button id=\"nextVideo\" type=\"button\" title=\"Следующее видео\" aria-label=\"Следующее видео\" " + (nextDisabled ? "disabled" : "") + ">Next ›</button></nav></div></div><aside id=\"gridPanel\" class=\"grid-panel" + (tab.collapsed ? " collapsed" : "") + "\"><header class=\"grid-head\"><button id=\"collapse\" class=\"collapse\" title=\"Свернуть панель\">" + (tab.collapsed ? "◀" : "▶") + "</button><div class=\"grid-control\"><label>Col</label><select id=\"columns\">" + [3,4,5,6,8].map(function(v) { return "<option " + (v === tab.columns ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Sec</label><select id=\"seconds\">" + [5,10,15,30,60].map(function(v) { return "<option " + (v === tab.seconds ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Scroll</label><select id=\"scroll\"><option value=\"center\" " + (tab.scroll === "center" ? "selected" : "") + ">Center</option><option value=\"edge\" " + (tab.scroll === "edge" ? "selected" : "") + ">Edge</option><option value=\"off\" " + (tab.scroll === "off" ? "selected" : "") + ">OFF</option></select></div></header><div id=\"gridScroll\" class=\"grid-scroll\"><div id=\"frameGrid\" class=\"frame-grid\"></div></div></aside></div><footer class=\"player-status\">Пробел — пуск/пауза · Стрелки — перемещение маркера · Клик/перетаскивание — точный переход</footer></section>";
+    view.innerHTML = "<section class=\"player-view\"><div class=\"player-layout\"" + gs + "\"><div class=\"player-main\"><div class=\"video-bar\"><button id=\"back\" class=\"back\">◀ VIDEO LIST</button><span id=\"reveal\" class=\"video-path\" title=\"Открыть в Проводнике\">" + escapeHtml(tab.video.path) + "</span><button id=\"videoScreenshot\" class=\"video-action\" title=\"Сохранить скрин текущего кадра\" aria-label=\"Сохранить скрин текущего кадра\">SHOT</button><button id=\"copyVideoName\" class=\"video-action\" title=\"Скопировать название файла без расширения\" aria-label=\"Скопировать название файла без расширения\">COPY</button><button id=\"openOkoshko\" class=\"video-action\" title=\"Открыть в okoshko\" aria-label=\"Открыть в okoshko\"><svg viewBox=\"0 0 16 16\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><rect x=\"2\" y=\"3\" width=\"12\" height=\"10\" rx=\"1.5\"/><path d=\"M2 6h12\"/></svg></button><button id=\"openExternal\" class=\"open-external\" title=\"Открыть в системном плеере\" aria-label=\"Открыть в системном плеере\">▶</button></div><div class=\"video-stage\"><video id=\"player\" controls playsinline src=\"" + tab.video.url + "\"></video><nav class=\"video-switcher\" aria-label=\"Управление воспроизведением и переключение видео\"><button id=\"previousVideo\" type=\"button\" title=\"Предыдущее видео\" aria-label=\"Предыдущее видео\" " + (prevDisabled ? "disabled" : "") + ">‹ Prev</button><button id=\"togglePlayback\" class=\"toggle-playback\" type=\"button\" title=\"Воспроизвести (Space)\" aria-label=\"Воспроизвести\" aria-pressed=\"false\"><span aria-hidden=\"true\">▶</span></button><button id=\"nextVideo\" type=\"button\" title=\"Следующее видео\" aria-label=\"Следующее видео\" " + (nextDisabled ? "disabled" : "") + ">Next ›</button></nav></div></div><aside id=\"gridPanel\" class=\"grid-panel" + (tab.collapsed ? " collapsed" : "") + "\"><header class=\"grid-head\"><button id=\"collapse\" class=\"collapse\" title=\"Свернуть панель\">" + (tab.collapsed ? "◀" : "▶") + "</button><div class=\"grid-control\"><label>Col</label><select id=\"columns\">" + [3,4,5,6,8].map(function(v) { return "<option " + (v === tab.columns ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Sec</label><select id=\"seconds\">" + [5,10,15,30,60].map(function(v) { return "<option " + (v === tab.seconds ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Scroll</label><select id=\"scroll\"><option value=\"center\" " + (tab.scroll === "center" ? "selected" : "") + ">Center</option><option value=\"edge\" " + (tab.scroll === "edge" ? "selected" : "") + ">Edge</option><option value=\"off\" " + (tab.scroll === "off" ? "selected" : "") + ">OFF</option></select></div></header><div id=\"gridScroll\" class=\"grid-scroll\"><div id=\"frameGrid\" class=\"frame-grid\"></div></div></aside></div><footer class=\"player-status\">Пробел — пуск/пауза · Стрелки — перемещение маркера · Клик/перетаскивание — точный переход</footer></section>";
     $("#gridPanel").outerHTML = sidePanelMarkup(tab);
     $(".video-switcher").insertAdjacentHTML("afterend", '<div class="video-note-box"><label for="videoNote" id="videoNoteTime">Заметки</label><textarea id="videoNote" aria-label="Заметка к текущему моменту видео" title="На паузе можно записать заметку" readonly></textarea></div>');
     var favoriteButton = document.createElement("button");
@@ -1305,6 +1331,10 @@
         document.querySelectorAll(".playback-rate").forEach(function(rateButton) { rateButton.classList.toggle("is-active", rateButton === button); });
       });
     });
+    $("#openOkoshko").addEventListener("click", async function() {
+      var error = await window.folderVideo.openInOkoshko(tab.video.path);
+      if (error) notice("Не удалось открыть в okoshko: " + error);
+    });
     $("#openExternal").addEventListener("click", async function() {
       var error = await window.folderVideo.openInSystemPlayer(tab.video.path);
       if (error) notice("Не удалось открыть внешний плеер: " + error);
@@ -1337,6 +1367,16 @@
     });
     document.querySelectorAll("[data-panel-mode]").forEach(function(button) { button.addEventListener("click", function() { tab.panelMode = button.dataset.panelMode; setPlayerPanelMode(tab, player); }); });
     $("#transcriptAction").addEventListener("click", function() { startPlayerTranscript(tab); });
+    var articleMenu = $("#obsidianMenu"); var articleToggle = $("#obsidianMenuToggle");
+    function closeArticleMenu() { articleMenu.classList.add("is-hidden"); articleToggle.setAttribute("aria-expanded", "false"); document.removeEventListener("click", outsideArticleMenu, true); }
+    function outsideArticleMenu(event) { if (!articleMenu.contains(event.target) && !articleToggle.contains(event.target)) closeArticleMenu(); }
+    $("#obsidianExport").addEventListener("click", function() { closeArticleMenu(); exportSummaryArticle(tab, "create"); });
+    articleToggle.addEventListener("click", function() {
+      if (!articleMenu.classList.contains("is-hidden")) { closeArticleMenu(); return; }
+      articleMenu.classList.remove("is-hidden"); articleToggle.setAttribute("aria-expanded", "true"); document.addEventListener("click", outsideArticleMenu, true);
+    });
+    articleMenu.addEventListener("keydown", function(event) { if (event.key === "Escape") { closeArticleMenu(); articleToggle.focus(); } });
+    articleMenu.querySelectorAll("[data-article-action]").forEach(function(item) { item.addEventListener("click", function() { closeArticleMenu(); if (item.dataset.articleAction === "open") openSummaryArticle(tab); else exportSummaryArticle(tab, "append"); }); });
     $("#columns").addEventListener("change", function(event) {
       tab.columns = Number(event.target.value);
       var grid = $("#frameGrid");

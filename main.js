@@ -7,7 +7,7 @@ const { pathToFileURL } = require('node:url');
 const { VideoMetadataStore } = require('./video-metadata-store');
 const { hashFile } = require('./hash-file');
 const { createSameFileMoveConflict } = require('./move-file-conflict');
-const { srtSegments, transcriptBatches, normalizeSummary } = require('./summary-core');
+const { srtSegments, transcriptBatches, normalizeSummary, FRAME_COUNT, frameTimes, parseVideoLink, parseRegValue, playerLaunch, safeNoteName, buildObsidianArticle, buildObsidianAddendum } = require('./summary-core');
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.avi', '.mkv', '.m4v', '.ogv']);
 const BASE_TITLE = 'Folder-video-vik';
@@ -29,6 +29,7 @@ let metadataStore;
 const metadataJobs = new Map();
 const transcriptJobs = new Map();
 const summaryJobs = new Map();
+const obsidianJobs = new Set();
 const notesSaveJobs = new Map();
 let pendingLaunchTarget = null;
 let isRendererReady = false;
@@ -39,7 +40,7 @@ function defaultSettings() {
   return {
     version: 1,
     theme: 'dark',
-    storage: { metadataDirectory: path.join(app.getPath('documents'), 'folder-video-metadata'), gitRepositoryUrl: '' },
+    storage: { metadataDirectory: path.join(app.getPath('documents'), 'folder-video-metadata'), gitRepositoryUrl: '', obsidianInbox: 'C:\\_ObsidianDB\\ai-study\\00 Inbox' },
     viewer: { columns: 3, seconds: 10, scroll: 'center', panelWidth: 410 },
     interface: { metadataCollapsed: false, gridCollapsed: false },
     transcription: { modelPath: '' },
@@ -57,10 +58,12 @@ function normalizeSettings(value) {
   const metadataDirectory = typeof source.storage?.metadataDirectory === 'string' && source.storage.metadataDirectory.trim()
     ? path.resolve(source.storage.metadataDirectory) : defaults.storage.metadataDirectory;
   const gitRepositoryUrl = typeof source.storage?.gitRepositoryUrl === 'string' ? source.storage.gitRepositoryUrl.trim() : '';
+  const obsidianInbox = typeof source.storage?.obsidianInbox === 'string' && source.storage.obsidianInbox.trim()
+    ? path.resolve(source.storage.obsidianInbox) : defaults.storage.obsidianInbox;
   return {
     version: 1,
     theme: source.theme === 'light' ? 'light' : 'dark',
-    storage: { metadataDirectory, gitRepositoryUrl }, viewer: { columns, seconds, scroll, panelWidth },
+    storage: { metadataDirectory, gitRepositoryUrl, obsidianInbox }, viewer: { columns, seconds, scroll, panelWidth },
     interface: { metadataCollapsed: source.interface?.metadataCollapsed === true, gridCollapsed: source.interface?.gridCollapsed === true },
     transcription: { modelPath: typeof source.transcription?.modelPath === 'string' ? source.transcription.modelPath.trim() : '' },
     ai: { model: typeof source.ai?.model === 'string' && source.ai.model.trim() ? source.ai.model.trim() : 'deepseek-flash', apiKey: '', keyConfigured: false, clearKey: false }
@@ -156,6 +159,15 @@ function createWindow() {
 async function getLaunchTarget(argv) {
   for (const candidate of argv.slice(1).reverse()) {
     if (typeof candidate !== 'string' || candidate.startsWith('-')) continue;
+    const link = parseVideoLink(candidate);
+    if (link) {
+      try {
+        const targetPath = path.resolve(link.path);
+        const stat = await lstat(targetPath);
+        if (stat.isFile() && VIDEO_EXTENSIONS.has(path.extname(targetPath).toLowerCase())) return { type: 'play', path: targetPath, time: link.time };
+      } catch {}
+      continue;
+    }
     try {
       const targetPath = path.resolve(candidate);
       if (targetPath === app.getAppPath()) continue;
@@ -167,9 +179,39 @@ async function getLaunchTarget(argv) {
   return null;
 }
 
+function queryRegistry(key, valueName) {
+  return new Promise(resolve => {
+    const args = ['query', key, ...(valueName ? ['/v', valueName] : ['/ve'])];
+    const child = spawn('reg.exe', args, { windowsHide: true }); let output = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.once('error', () => resolve(''));
+    child.once('close', code => resolve(code === 0 ? parseRegValue(output) : ''));
+  });
+}
+
+// Команда плеера, назначенного в Windows для расширения: выбор пользователя, затем HKCR.
+async function defaultPlayerCommand(extension) {
+  const userChoice = await queryRegistry(`HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\${extension}\\UserChoice`, 'ProgId');
+  const progId = userChoice || await queryRegistry(`HKCR\\${extension}`);
+  return progId ? queryRegistry(`HKCR\\${progId}\\shell\\open\\command`) : '';
+}
+
+// Ссылка folder-video:// из статьи Obsidian: видео открывается в системном плеере с нужной секунды.
+async function playInSystemPlayer(target) {
+  const command = process.platform === 'win32' ? await defaultPlayerCommand(path.extname(target.path).toLowerCase()) : '';
+  const launch = command ? playerLaunch(command, target.path, target.time, process.env) : null;
+  if (!launch) { await shell.openPath(target.path); return; }
+  await new Promise(resolve => {
+    const child = spawn(launch.executable, launch.args, { detached: true, stdio: 'ignore', windowsHide: false });
+    child.once('error', async () => { await shell.openPath(target.path); resolve(); });
+    child.once('spawn', () => { child.unref(); resolve(); });
+  });
+}
+
 async function openLaunchTarget(argv) {
   const target = await getLaunchTarget(argv);
   if (!target) return;
+  if (target.type === 'play') { await playInSystemPlayer(target); return; }
   const mainWindow = BrowserWindow.getAllWindows()[0];
   if (!mainWindow) {
     pendingLaunchTarget = target;
@@ -445,6 +487,56 @@ function runSummary(filePath, force) {
   return promise;
 }
 
+function obsidianArticlePath(filePath) {
+  return path.join(appSettings.storage.obsidianInbox, `${safeNoteName(`Сводка — ${path.parse(filePath).name}`)}.md`);
+}
+
+async function exportSummaryToObsidian(filePath, duration, mode = 'create') {
+  await validateNotesVideo(filePath);
+  const saved = await loadSummary(filePath);
+  if (saved.error) throw new Error(saved.error);
+  if (!saved.available) throw new Error('Сначала создайте актуальную сводку.');
+  const inbox = appSettings.storage.obsidianInbox;
+  const name = path.parse(filePath).name;
+  const noteName = safeNoteName(`Сводка — ${name}`);
+  if (mode === 'append') {
+    const target = obsidianArticlePath(filePath);
+    const existing = await readFile(target, 'utf8').catch(() => null);
+    if (existing !== null) {
+      const addendum = buildObsidianAddendum({ videoPath: filePath, summary: saved.summary, date: new Date().toLocaleString('ru-RU') });
+      const temporary = `${target}.${process.pid}.tmp`;
+      try { await writeFile(temporary, `${existing.trimEnd()}\n${addendum}`, 'utf8'); await rename(temporary, target); }
+      catch (error) { await rm(temporary, { force: true }).catch(() => {}); throw error; }
+      return { path: target, frames: 0, warning: '', appended: true };
+    }
+  }
+  const imagePrefix = `${safeNoteName(name)}_${transcriptKey(filePath)}`;
+  const assetsDirectory = path.join(inbox, 'images');
+  await mkdir(assetsDirectory, { recursive: true });
+  const imageName = index => `${imagePrefix}_${String(index + 1).padStart(2, '0')}.jpg`;
+  for (let index = 0; index < FRAME_COUNT; index++) await rm(path.join(assetsDirectory, imageName(index)), { force: true });
+  const frames = [];
+  let warning = '';
+  if (Number.isFinite(duration) && duration > 0) {
+    for (const [index, time] of frameTimes(duration).entries()) {
+      const fileName = imageName(index);
+      try {
+        await runFfmpeg(['-v', 'error', '-nostdin', '-ss', time.toFixed(3), '-i', filePath, '-an', '-sn', '-frames:v', '1', '-vf', 'scale=480:-2', '-q:v', '4', '-y', path.join(assetsDirectory, fileName)], () => {});
+        frames.push({ time, width: 180, file: fileName });
+      } catch (error) {
+        if (error.code === 'ENOENT') { warning = 'FFmpeg не найден в PATH: статья создана без миниатюр.'; break; }
+        warning = 'Часть миниатюр не удалось получить.';
+      }
+    }
+  } else warning = 'Длительность видео неизвестна: статья создана без миниатюр.';
+  const article = buildObsidianArticle({ title: name, videoPath: filePath, duration, summary: saved.summary, frames });
+  const target = path.join(inbox, `${noteName}.md`);
+  const temporary = `${target}.${process.pid}.tmp`;
+  try { await writeFile(temporary, article, 'utf8'); await rename(temporary, target); }
+  catch (error) { await rm(temporary, { force: true }).catch(() => {}); throw error; }
+  return { path: target, frames: frames.length, warning };
+}
+
 function speedUpCodecArguments(extension) {
   switch (extension.toLowerCase()) {
     case '.webm': return ['-c:v', 'libvpx-vp9', '-c:a', 'libopus'];
@@ -610,6 +702,17 @@ ipcMain.handle('folder-video:read-video', async (_event, filePath) => {
 
 ipcMain.handle('folder-video:show-in-folder', async (_event, filePath) => {
   if (typeof filePath === 'string') shell.showItemInFolder(filePath);
+});
+
+ipcMain.handle('folder-video:open-in-okoshko', async (_event, filePath) => {
+  if (typeof filePath !== 'string') return 'Invalid video path';
+  const exe = path.join(process.env.LOCALAPPDATA || '', 'okoshko', 'okoshko.exe');
+  try { await lstat(exe); } catch { return 'okoshko.exe не найден: ' + exe; }
+  return new Promise(resolve => {
+    const child = spawn(exe, [filePath], { detached: true, stdio: 'ignore' });
+    child.once('error', error => resolve(error.message));
+    child.once('spawn', () => { child.unref(); resolve(''); });
+  });
 });
 
 ipcMain.handle('folder-video:open-in-system-player', async (_event, filePath) => {
@@ -934,6 +1037,20 @@ ipcMain.handle('folder-video:summary-cancel', (_event, filePath) => {
   job.controller.abort();
   return { canceled: true };
 });
+ipcMain.handle('folder-video:summary-obsidian-path', async (_event, filePath) => {
+  if (typeof filePath !== 'string') return { exists: false };
+  const target = obsidianArticlePath(filePath);
+  const exists = await lstat(target).then(stat => stat.isFile(), () => false);
+  return { exists, path: target };
+});
+ipcMain.handle('folder-video:summary-export-obsidian', async (_event, filePath, duration, mode) => {
+  if (typeof filePath !== 'string') return { error: 'Некорректный путь к видео' };
+  if (obsidianJobs.has(filePath)) return { error: 'Статья для этого видео уже создаётся.' };
+  obsidianJobs.add(filePath);
+  try { return await exportSummaryToObsidian(filePath, Number(duration), mode === 'append' ? 'append' : 'create'); }
+  catch (error) { return { error: error.message || 'Не удалось создать статью' }; }
+  finally { obsidianJobs.delete(filePath); }
+});
 ipcMain.handle('folder-video:notes-load', async (_event, filePath) => loadNotes(filePath));
 ipcMain.handle('folder-video:notes-save', async (_event, filePath, text) => saveNotes(filePath, text));
 
@@ -965,6 +1082,13 @@ if (!gotSingleInstanceLock) {
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
+  if (app.isPackaged) app.setAsDefaultProtocolClient('folder-video');
+  const launchTarget = await getLaunchTarget(process.argv);
+  if (launchTarget?.type === 'play') {
+    await playInSystemPlayer(launchTarget);
+    app.quit();
+    return;
+  }
   await loadSettings();
   openMetadataStore();
   createWindow();

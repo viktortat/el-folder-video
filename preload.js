@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('folderVideo', {
   syncMetadata: () => ipcRenderer.invoke('folder-video:sync-metadata'),
   getPathForFile: file => webUtils.getPathForFile(file),
   showInFolder: filePath => ipcRenderer.invoke('folder-video:show-in-folder', filePath),
+  openInOkoshko: filePath => ipcRenderer.invoke('folder-video:open-in-okoshko', filePath),
   openInSystemPlayer: filePath => ipcRenderer.invoke('folder-video:open-in-system-player', filePath),
   setTitle: folderPath => ipcRenderer.invoke('folder-video:set-title', folderPath),
   copyPath: filePath => ipcRenderer.invoke('folder-video:copy-path', filePath),
@@ -34,6 +35,8 @@ contextBridge.exposeInMainWorld('folderVideo', {
   loadSummary: filePath => ipcRenderer.invoke('folder-video:summary-load', filePath),
   startSummary: (filePath, force) => ipcRenderer.invoke('folder-video:summary-start', filePath, force),
   cancelSummary: filePath => ipcRenderer.invoke('folder-video:summary-cancel', filePath),
+  exportSummaryToObsidian: (filePath, duration, mode) => ipcRenderer.invoke('folder-video:summary-export-obsidian', filePath, duration, mode),
+  getObsidianArticle: filePath => ipcRenderer.invoke('folder-video:summary-obsidian-path', filePath),
   loadNotes: filePath => ipcRenderer.invoke('folder-video:notes-load', filePath),
   saveNotes: (filePath, text) => ipcRenderer.invoke('folder-video:notes-save', filePath, text),
   onTranscriptProgress: callback => {

@@ -93,3 +93,10 @@ will NOT match text with plain double quotes.
 Solutions:
 - Use `[System.IO.File]::ReadAllText / WriteAllText` with .NET to avoid quoting issues
 - Or double-quoted strings with backtick-escaping: `$c.Replace(`"old`", `"new`")`
+
+### Скриптовые правки файлов на Windows
+
+- `python3` в `PATH` — заглушка Microsoft Store: печатает «Python» и ничего не выполняет, без ошибки. Использовать `python`.
+- Исходники проекта (`*.js`, `*.css`, `*.md`) хранятся с окончаниями CRLF. В Python читать файл через `open(p, encoding='utf8').read()`, искать и заменять фрагменты с `\n`, писать через `open(p, 'w', encoding='utf8', newline='\r\n')`. Иначе многострочные замены не находятся или окончания строк переписываются целиком.
+- Длинные heredoc с русским текстом, кавычками и обратными апострофами ломаются в Bash («unexpected EOF»). Для точечных правок использовать `Edit`; для массовых — записать скрипт в файл и запустить `python <файл>`.
+- В скрипте проверять каждую замену (`assert old in s`), а после запуска — `grep` по результату и `node --check`: нельзя считать правку применённой, пока это не проверено.
