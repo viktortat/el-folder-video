@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('folderVideo', {
   },
   planCut: (filePath, ranges, precise) => ipcRenderer.invoke('folder-video:cut-plan', filePath, ranges, precise),
   startCut: (filePath, operationId, ranges, precise) => ipcRenderer.invoke('folder-video:cut-start', filePath, operationId, ranges, precise),
+  loadWaveform: filePath => ipcRenderer.invoke('folder-video:cut-waveform', filePath),
   cancelCut: operationId => ipcRenderer.invoke('folder-video:cut-cancel', operationId),
   undoCut: undoId => ipcRenderer.invoke('folder-video:cut-undo', undoId),
   listCutBackups: () => ipcRenderer.invoke('folder-video:cut-list-backups'),

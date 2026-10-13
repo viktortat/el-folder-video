@@ -11,6 +11,7 @@ const { UNDO_DIRECTORY, CutUndoStore } = require('./cut-undo');
 const { reencodeCodecArguments } = require('./cut-core');
 const { probeDuration, listKeyframes, planCut, executeCut } = require('./cut-ffmpeg');
 const { shiftNotes } = require('./notes-core');
+const { PeakCollector, SAMPLE_RATE, BINS_PER_SECOND } = require('./waveform-core');
 const { srtSegments, transcriptBatches, normalizeSummary, FRAME_COUNT, frameTimes, parseVideoLink, parseRegValue, playerLaunch, safeNoteName, buildObsidianArticle, buildObsidianAddendum } = require('./summary-core');
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.avi', '.mkv', '.m4v', '.ogv']);
@@ -634,7 +635,8 @@ function toVideoItem(filePath, stat) {
   return {
     id: filePath,
     path: filePath,
-    url: pathToFileURL(filePath).href,
+    // Версия в запросе: после замены файла (вырезка, отмена) Chromium не должен брать байты из кэша по прежнему адресу.
+    url: `${pathToFileURL(filePath).href}?v=${stat.size}-${Math.round(stat.mtimeMs)}`,
     name: path.basename(filePath),
     size: stat.size,
     lastModified: stat.mtimeMs
@@ -1100,6 +1102,37 @@ ipcMain.handle('folder-video:cut-start', async (event, filePath, operationId, ra
   } finally { if (cutJob === job) cutJob = null; }
 });
 ipcMain.handle('folder-video:cut-cancel', (_event, operationId) => { if (cutJob && cutJob.operationId === operationId) { cutJob.cancel(); return true; } return false; });
+// Звуковая волна для полосы вырезки: первая звуковая дорожка, моно 8 кГц, пики по 2,5 мс. Результат кэшируется.
+const waveformCache = new Map();
+function computeWaveform(filePath) {
+  return new Promise((resolve, reject) => {
+    const collector = new PeakCollector();
+    let stderr = '';
+    const child = spawn('ffmpeg', ['-v', 'error', '-i', filePath, '-map', '0:a:0', '-vn', '-ac', '1', '-ar', String(SAMPLE_RATE), '-f', 's16le', 'pipe:1'], { windowsHide: true });
+    child.once('error', reject);
+    child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-1000); });
+    child.stdout.on('data', chunk => collector.push(chunk));
+    child.once('close', code => {
+      const peaks = collector.result();
+      if (code === 0 || peaks.length) resolve({ binsPerSecond: BINS_PER_SECOND, peaks: Buffer.from(peaks.buffer, peaks.byteOffset, peaks.length) });
+      else resolve({ none: true, reason: stderr.trim() });
+    });
+  });
+}
+ipcMain.handle('folder-video:cut-waveform', async (_event, filePath) => {
+  try {
+    await validateCutSource(filePath);
+    const info = await lstat(filePath);
+    const key = `${filePath}|${info.size}|${info.mtimeMs}`;
+    if (!waveformCache.has(key)) {
+      waveformCache.set(key, computeWaveform(filePath));
+      if (waveformCache.size > 3) waveformCache.delete(waveformCache.keys().next().value);
+    }
+    return await waveformCache.get(key);
+  } catch (error) {
+    return { error: error.code === 'ENOENT' ? 'FFmpeg не найден в PATH.' : (error.message || 'Не удалось построить волну') };
+  }
+});
 ipcMain.handle('folder-video:cut-undo', async (_event, undoId) => {
   try { const entry = await cutUndoStore.undo(String(undoId)); return { success: true, outputPath: entry.sourcePath }; }
   catch (error) { return { error: error.message || 'Не удалось отменить вырезку' }; }

@@ -1460,16 +1460,28 @@
   var CUT_FRAME_STEP = 1 / 30;
   var CUT_MIN_HANDLE_GAP = 0.1;
   function cutModel(tab) {
-    if (!tab.cut) tab.cut = { open: false, ranges: [], pendingStart: null, precise: localStorage.getItem("folder-video-cut-precise") === "true", plan: null, planError: "", planToken: 0, planTimer: null };
+    if (!tab.cut) tab.cut = { open: false, ranges: [], pendingStart: null, precise: localStorage.getItem("folder-video-cut-precise") === "true", plan: null, planError: "", planToken: 0, planTimer: null, view: null, dragging: false, wave: null };
     return tab.cut;
   }
-  function cutPercent(seconds, duration) { return Math.max(0, Math.min(100, seconds / duration * 100)); }
+  // Видимое окно полосы: {start, span} в секундах; по умолчанию показан весь ролик.
+  function cutView(tab, player) {
+    var cut = cutModel(tab);
+    cut.view = window.CutCore.clampView(cut.view || window.CutCore.fullView(player.duration), player.duration);
+    return cut.view;
+  }
+  function cutPos(seconds, view) { return (seconds - view.start) / view.span * 100; }
+  function cutRangeBox(range, view) {
+    var left = cutPos(range.start, view); var right = cutPos(range.end, view);
+    if (right <= 0 || left >= 100) return null;
+    var clippedLeft = Math.max(0, left);
+    return { left: clippedLeft, width: Math.min(100, right) - clippedLeft, clipStart: left < 0, clipEnd: right > 100 };
+  }
   function cutClock(seconds) { return window.CutCore.formatClock(seconds); }
   function cutInfoText(tab) {
     var cut = cutModel(tab);
     if (cut.planError) return cut.planError;
     if (cut.pendingStart !== null && !cut.ranges.length) return "Начало " + cutClock(cut.pendingStart) + ". Найдите конец и нажмите O.";
-    if (!cut.ranges.length) return "I — начало, O — конец, X — вырезать. Ctrl+Z — отменить последнюю вырезку.";
+    if (!cut.ranges.length) return "I — начало, O — конец (без I — от начала видео), X — вырезать. +/− — масштаб полосы, Ctrl+колесо — масштаб у курсора. Ctrl+Z — отменить вырезку.";
     if (!cut.plan) return "Проверяю границы…";
     var plan = cut.plan;
     var removed = window.CutCore.removedSeconds(plan.ranges);
@@ -1497,13 +1509,82 @@
     var run = $("#cutRun");
     if (run) { var cut = cutModel(tab); run.disabled = !cut.ranges.length || Boolean(state.cutJob); run.textContent = "Вырезать" + (cut.ranges.length ? " (" + cut.ranges.length + ")" : "") + " · X"; }
   }
-  function updateCutPlayhead(tab, player) {
+  function placeCutPlayhead(tab, player) {
     var head = $("#cutPlayhead");
-    if (head && Number.isFinite(player.duration) && player.duration > 0) head.style.left = cutPercent(player.currentTime || 0, player.duration) + "%";
+    if (!head || !tab.cut || !tab.cut.view) return;
+    var position = cutPos(player.currentTime || 0, tab.cut.view);
+    head.style.display = position < 0 || position > 100 ? "none" : "";
+    head.style.left = position + "%";
   }
-  function setCutRangeStyle(element, range, duration) {
-    var left = cutPercent(range.start, duration);
-    element.style.left = left + "%"; element.style.width = (cutPercent(range.end, duration) - left) + "%";
+  // При воспроизведении окно следует за текущим моментом.
+  function updateCutPlayhead(tab, player) {
+    var cut = tab.cut;
+    if (!cut || !cut.open || !cut.view || !Number.isFinite(player.duration) || player.duration <= 0) return;
+    var time = player.currentTime || 0;
+    if (!cut.dragging && (time < cut.view.start || time > cut.view.start + cut.view.span)) {
+      cut.view = window.CutCore.revealView(cut.view, time, player.duration);
+      renderCutBar(tab, player);
+      return;
+    }
+    placeCutPlayhead(tab, player);
+  }
+  function setCutRangeStyle(element, range, view) {
+    var box = cutRangeBox(range, view);
+    if (!box) { element.style.display = "none"; return; }
+    element.style.display = ""; element.style.left = box.left + "%"; element.style.width = box.width + "%";
+    element.classList.toggle("is-clipped-start", box.clipStart); element.classList.toggle("is-clipped-end", box.clipEnd);
+  }
+  function zoomCutBar(tab, player, factor, anchor) {
+    var cut = cutModel(tab);
+    if (!cut.open || !Number.isFinite(player.duration) || player.duration <= 0) return;
+    var view = cutView(tab, player);
+    var time = player.currentTime || 0;
+    var focus = anchor !== undefined ? anchor : (time >= view.start && time <= view.start + view.span ? time : view.start + view.span / 2);
+    cut.view = window.CutCore.zoomView(view, factor, focus, player.duration);
+    renderCutBar(tab, player);
+  }
+  function zoomCutToRange(tab, player) {
+    var cut = cutModel(tab);
+    var target = cut.ranges.length ? { start: cut.ranges[0].start, end: cut.ranges[cut.ranges.length - 1].end } : cut.pendingStart !== null ? { start: Math.min(cut.pendingStart, player.currentTime), end: Math.max(cut.pendingStart, player.currentTime) } : null;
+    if (!target || target.end <= target.start) { zoomCutBar(tab, player, 0.25); return; }
+    cut.view = window.CutCore.viewForRange(target.start, target.end, player.duration);
+    renderCutBar(tab, player);
+  }
+  // Звуковая волна: пики считает main (ffmpeg), здесь они только рисуются на canvas под диапазонами.
+  function ensureCutWave(tab, player) {
+    var cut = tab.cut;
+    if (cut.wave) return;
+    cut.wave = { status: "loading" };
+    var filePath = tab.video.path;
+    window.folderVideo.loadWaveform(filePath).then(function(result) {
+      if (!tab.cut || tab.video.path !== filePath) return;
+      if (result && result.peaks) {
+        var peaks = new Int8Array(result.peaks.buffer, result.peaks.byteOffset, result.peaks.length);
+        tab.cut.wave = { status: "ready", peaks: peaks, binsPerSecond: result.binsPerSecond, gain: window.WaveformCore.peakGain(peaks) };
+      } else tab.cut.wave = { status: result && result.none ? "none" : "error" };
+      var current = $("#player");
+      if (active() === tab && current) renderCutBar(tab, current);
+    }).catch(function() { if (tab.cut) tab.cut.wave = { status: "error" }; });
+  }
+  function drawCutWave(tab) {
+    var canvas = $("#cutWave");
+    var cut = tab.cut;
+    if (!canvas || !cut || !cut.view) return;
+    var wave = cut.wave;
+    canvas.style.display = wave && wave.status === "ready" ? "" : "none";
+    if (!wave || wave.status !== "ready") return;
+    var ratio = window.devicePixelRatio || 1;
+    var width = Math.max(1, Math.round(canvas.clientWidth * ratio)); var height = Math.max(1, Math.round(canvas.clientHeight * ratio));
+    canvas.width = width; canvas.height = height;
+    var context = canvas.getContext("2d");
+    var columns = window.WaveformCore.waveformColumns(wave.peaks, wave.binsPerSecond, cut.view.start, cut.view.span / width, width);
+    var middle = height / 2; var amplitude = middle - 2 * ratio;
+    context.fillStyle = document.body.classList.contains("light") ? "#7655cc" : "#8f7bd6";
+    for (var x = 0; x < width; x++) {
+      var top = middle - columns.max[x] * wave.gain * amplitude / 127;
+      var bottom = middle - columns.min[x] * wave.gain * amplitude / 127;
+      context.fillRect(x, Math.min(top, middle - 0.5), 1, Math.max(1, bottom - top));
+    }
   }
   function renderCutBar(tab, player) {
     var stage = $(".video-stage");
@@ -1516,31 +1597,44 @@
       return;
     }
     var duration = player.duration;
+    var view = cutView(tab, player);
+    ensureCutWave(tab, player);
     var bar = existing;
     if (!bar) { bar = document.createElement("div"); bar.id = "cutBar"; bar.className = "cut-bar"; $(".video-switcher").before(bar); }
     stage.classList.add("has-cut-bar");
     var ranges = cut.ranges.map(function(range, index) {
-      var left = cutPercent(range.start, duration);
-      return '<div class="cut-range" style="left:' + left + '%;width:' + (cutPercent(range.end, duration) - left) + '%" data-index="' + index + '"><span class="cut-handle is-start" data-index="' + index + '" data-edge="start" tabindex="0" role="slider" title="Начало фрагмента: ' + cutClock(range.start) + '" aria-label="Начало фрагмента ' + (index + 1) + '" aria-valuemin="0" aria-valuemax="' + Math.round(duration) + '" aria-valuenow="' + Math.round(range.start) + '"></span><span class="cut-handle is-end" data-index="' + index + '" data-edge="end" tabindex="0" role="slider" title="Конец фрагмента: ' + cutClock(range.end) + '" aria-label="Конец фрагмента ' + (index + 1) + '" aria-valuemin="0" aria-valuemax="' + Math.round(duration) + '" aria-valuenow="' + Math.round(range.end) + '"></span></div>';
+      var box = cutRangeBox(range, view);
+      if (!box) return "";
+      return '<div class="cut-range' + (box.clipStart ? " is-clipped-start" : "") + (box.clipEnd ? " is-clipped-end" : "") + '" style="left:' + box.left + '%;width:' + box.width + '%" data-index="' + index + '"><span class="cut-handle is-start" data-index="' + index + '" data-edge="start" tabindex="0" role="slider" title="Начало фрагмента: ' + cutClock(range.start) + '" aria-label="Начало фрагмента ' + (index + 1) + '" aria-valuemin="0" aria-valuemax="' + Math.round(duration) + '" aria-valuenow="' + Math.round(range.start) + '"></span><span class="cut-handle is-end" data-index="' + index + '" data-edge="end" tabindex="0" role="slider" title="Конец фрагмента: ' + cutClock(range.end) + '" aria-label="Конец фрагмента ' + (index + 1) + '" aria-valuemin="0" aria-valuemax="' + Math.round(duration) + '" aria-valuenow="' + Math.round(range.end) + '"></span></div>';
     }).join("");
-    var pending = cut.pendingStart !== null ? '<div class="cut-pending" style="left:' + cutPercent(cut.pendingStart, duration) + '%" title="Начало: ' + cutClock(cut.pendingStart) + '"></div>' : "";
+    var pendingPosition = cut.pendingStart !== null ? cutPos(cut.pendingStart, view) : -1;
+    var pending = pendingPosition >= 0 && pendingPosition <= 100 ? '<div class="cut-pending" style="left:' + pendingPosition + '%" title="Начало: ' + cutClock(cut.pendingStart) + '"></div>' : "";
     var chips = cut.ranges.map(function(range, index) {
       return '<span class="cut-chip"><button type="button" class="cut-chip-seek" data-seek="' + index + '" title="Перейти к началу фрагмента" aria-label="Перейти к началу фрагмента ' + (index + 1) + '">' + cutClock(range.start) + ' → ' + cutClock(range.end) + '</button><button type="button" class="cut-chip-remove" data-remove="' + index + '" title="Убрать фрагмент" aria-label="Убрать фрагмент ' + (index + 1) + '">✕</button></span>';
     }).join("");
-    bar.innerHTML = '<div id="cutTrack" class="cut-track" role="group" aria-label="Полоса фрагментов для вырезки">' + ranges + pending + '<div id="cutPlayhead" class="cut-playhead"></div></div>' +
+    var icon = function(paths) { return '<svg viewBox="0 0 24 24" aria-hidden="true">' + paths + '</svg>'; };
+    var lens = '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>';
+    var waveLayer = '<canvas id="cutWave" class="cut-wave" aria-hidden="true"></canvas>' + (!cut.wave || cut.wave.status === "loading" ? '<span class="cut-wave-note">Строю звуковую волну…</span>' : "");
+    bar.innerHTML = '<div class="cut-trackrow"><div id="cutTrack" class="cut-track" role="group" aria-label="Полоса фрагментов для вырезки">' + waveLayer + ranges + pending + '<div id="cutPlayhead" class="cut-playhead"></div></div>' +
+      '<div class="cut-zoom"><button type="button" id="cutZoomOut" class="cut-icon" title="Отдалить (−)" aria-label="Отдалить">' + icon(lens + '<path d="M8 11h6"/>') + '</button><button type="button" id="cutZoomIn" class="cut-icon" title="Приблизить (+, Ctrl+колесо)" aria-label="Приблизить">' + icon(lens + '<path d="M11 8v6M8 11h6"/>') + '</button><button type="button" id="cutZoomRange" class="cut-icon" title="Приблизить к выборке" aria-label="Приблизить к выборке">' + icon('<path d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"/><path d="M9 12h6"/>') + '</button><button type="button" id="cutZoomFit" class="cut-icon" title="Показать весь ролик" aria-label="Показать весь ролик">' + icon('<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>') + '</button></div></div>' +
+      '<div class="cut-scale" aria-hidden="true"><span>' + cutClock(view.start) + '</span><span>окно ' + cutClock(view.span) + '</span><span>' + cutClock(view.start + view.span) + '</span></div>' +
       '<div class="cut-controls"><button type="button" id="cutMarkStart" title="Начало фрагмента (I)" aria-label="Начало фрагмента">[ Начало</button><button type="button" id="cutMarkEnd" title="Конец фрагмента (O)" aria-label="Конец фрагмента">Конец ]</button><span class="cut-chips">' + chips + '</span>' +
       '<button type="button" id="cutPreview" title="Проиграть место склейки" aria-label="Проиграть место склейки"' + (cut.ranges.length ? "" : " disabled") + '>Просмотр</button>' +
       '<label class="cut-precise" title="Перекодировать для точности до кадра: медленнее, но границы ровно там, где отмечены"><input type="checkbox" id="cutPrecise"' + (cut.precise ? " checked" : "") + ' aria-label="Точно (перекодировать)"> Точно</label>' +
       '<button type="button" id="cutRun" class="cut-run" title="Вырезать отмеченные фрагменты (X)" aria-label="Вырезать отмеченные фрагменты"></button><button type="button" id="cutClose" title="Закрыть панель вырезки" aria-label="Закрыть панель вырезки">✕</button></div>' +
       '<div id="cutInfo" class="cut-info" role="status"></div>';
-    updateCutInfo(tab); updateCutPlayhead(tab, player);
+    updateCutInfo(tab); placeCutPlayhead(tab, player); drawCutWave(tab);
     $("#cutMarkStart").addEventListener("click", function() { cutMarkStart(tab, player); });
     $("#cutMarkEnd").addEventListener("click", function() { cutMarkEnd(tab, player); });
     $("#cutPreview").addEventListener("click", function() { previewCut(tab, player); });
     $("#cutRun").addEventListener("click", function() { runCut(tab, player); });
     $("#cutClose").addEventListener("click", function() { cut.open = false; renderCutBar(tab, player); });
+    $("#cutZoomOut").addEventListener("click", function() { zoomCutBar(tab, player, 2); });
+    $("#cutZoomIn").addEventListener("click", function() { zoomCutBar(tab, player, 0.5); });
+    $("#cutZoomRange").addEventListener("click", function() { zoomCutToRange(tab, player); });
+    $("#cutZoomFit").addEventListener("click", function() { cut.view = window.CutCore.fullView(duration); renderCutBar(tab, player); });
     $("#cutPrecise").addEventListener("change", function(event) { cut.precise = event.target.checked; try { localStorage.setItem("folder-video-cut-precise", String(cut.precise)); } catch (error) {} event.target.blur(); scheduleCutPlan(tab); });
-    bar.querySelectorAll("[data-seek]").forEach(function(button) { button.addEventListener("click", function() { player.currentTime = cut.ranges[Number(button.dataset.seek)].start; }); });
+    bar.querySelectorAll("[data-seek]").forEach(function(button) { button.addEventListener("click", function() { var start = cut.ranges[Number(button.dataset.seek)].start; player.currentTime = start; cut.view = window.CutCore.revealView(cutView(tab, player), start, duration); renderCutBar(tab, player); }); });
     bar.querySelectorAll("[data-remove]").forEach(function(button) { button.addEventListener("click", function() { cut.ranges.splice(Number(button.dataset.remove), 1); renderCutBar(tab, player); scheduleCutPlan(tab); }); });
     bar.querySelectorAll(".cut-handle").forEach(function(handle) {
       handle.addEventListener("keydown", function(event) {
@@ -1550,30 +1644,38 @@
         var next = range[edge] + (event.key === "ArrowLeft" ? -1 : 1) * (event.shiftKey ? 1 : CUT_FRAME_STEP);
         range[edge] = edge === "start" ? Math.max(0, Math.min(next, range.end - CUT_MIN_HANDLE_GAP)) : Math.min(duration, Math.max(next, range.start + CUT_MIN_HANDLE_GAP));
         player.currentTime = range[edge];
+        cut.view = window.CutCore.revealView(cutView(tab, player), range[edge], duration);
         renderCutBar(tab, player); scheduleCutPlan(tab);
         var again = bar.querySelector('.cut-handle[data-index="' + handle.dataset.index + '"][data-edge="' + edge + '"]'); if (again) again.focus();
       });
     });
     var track = $("#cutTrack"); var drag = null;
-    function timeAt(event) { var rect = track.getBoundingClientRect(); return Math.max(0, Math.min(duration, (event.clientX - rect.left) / rect.width * duration)); }
+    if (window.ResizeObserver) new ResizeObserver(function() { drawCutWave(tab); }).observe(track);
+    function timeAt(event) { var rect = track.getBoundingClientRect(); return Math.max(0, Math.min(duration, view.start + (event.clientX - rect.left) / rect.width * view.span)); }
+    track.addEventListener("wheel", function(event) {
+      event.preventDefault();
+      if (event.ctrlKey || event.metaKey) zoomCutBar(tab, player, event.deltaY > 0 ? 1.25 : 0.8, timeAt(event));
+      else { cut.view = window.CutCore.clampView({ start: view.start + ((event.deltaY || event.deltaX) > 0 ? 1 : -1) * view.span * 0.15, span: view.span }, duration); renderCutBar(tab, player); }
+    }, { passive: false });
     track.addEventListener("pointerdown", function(event) {
       track.setPointerCapture(event.pointerId);
       var handle = event.target instanceof Element ? event.target.closest(".cut-handle") : null;
       drag = handle ? { index: Number(handle.dataset.index), edge: handle.dataset.edge } : { scrub: true };
+      cut.dragging = true;
       if (drag.scrub) player.currentTime = timeAt(event);
     });
     track.addEventListener("pointermove", function(event) {
       if (!drag) return;
       var time = timeAt(event);
-      if (drag.scrub) { player.currentTime = time; return; }
+      if (drag.scrub) { player.currentTime = time; placeCutPlayhead(tab, player); return; }
       var range = cut.ranges[drag.index];
       range[drag.edge] = drag.edge === "start" ? Math.min(time, range.end - CUT_MIN_HANDLE_GAP) : Math.max(time, range.start + CUT_MIN_HANDLE_GAP);
-      setCutRangeStyle(track.querySelector('.cut-range[data-index="' + drag.index + '"]'), range, duration);
-      player.currentTime = range[drag.edge];
+      setCutRangeStyle(track.querySelector('.cut-range[data-index="' + drag.index + '"]'), range, view);
+      player.currentTime = range[drag.edge]; placeCutPlayhead(tab, player);
     });
     function finishDrag() {
       if (!drag) return;
-      var wasHandle = !drag.scrub; drag = null;
+      var wasHandle = !drag.scrub; drag = null; cut.dragging = false;
       if (wasHandle) { cut.ranges = window.CutCore.normalizeRanges(cut.ranges, duration); renderCutBar(tab, player); scheduleCutPlan(tab); }
     }
     track.addEventListener("pointerup", finishDrag); track.addEventListener("pointercancel", finishDrag);
@@ -1586,8 +1688,8 @@
   function cutMarkEnd(tab, player) {
     if (!Number.isFinite(player.duration) || player.duration <= 0) { notice("Дождитесь загрузки длительности видео."); return; }
     var cut = cutModel(tab);
-    if (cut.pendingStart === null) { cut.open = true; renderCutBar(tab, player); notice("Сначала отметьте начало клавишей I."); return; }
-    var start = Math.min(cut.pendingStart, player.currentTime); var end = Math.max(cut.pendingStart, player.currentTime);
+    var from = cut.pendingStart === null ? 0 : cut.pendingStart;
+    var start = Math.min(from, player.currentTime); var end = Math.max(from, player.currentTime);
     if (end - start < window.CutCore.MIN_RANGE_SECONDS) { notice("Конец должен быть позже начала."); return; }
     cut.ranges = window.CutCore.normalizeRanges(cut.ranges.concat([{ start: start, end: end }]), player.duration);
     cut.pendingStart = null; cut.open = true;
@@ -1711,6 +1813,10 @@
         player.currentTime = Math.max(0, Math.min(player.duration || 0, player.currentTime + (event.code === "Comma" ? -CUT_FRAME_STEP : CUT_FRAME_STEP)));
         return;
       }
+    }
+    if (!event.ctrlKey && !event.metaKey && !event.altKey && tab.cut && tab.cut.open) {
+      if (event.code === "Equal" || event.code === "NumpadAdd") { event.preventDefault(); zoomCutBar(tab, player, 0.5); return; }
+      if (event.code === "Minus" || event.code === "NumpadSubtract") { event.preventDefault(); zoomCutBar(tab, player, 2); return; }
     }
     var step = tab.seconds; var target = null;
     if (event.key === " ") {

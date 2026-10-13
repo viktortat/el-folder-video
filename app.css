@@ -239,3 +239,24 @@ body.light .cut-overlay-box button { background:#fff; border-color:#c7d0df; colo
 body.light .cut-backups { color:#4c5d75; }
 body.light .cut-backup-name { color:#1f2a3a; }
 body.light .cut-backup-meta { color:#6b7a90; }
+.video-stage.has-cut-bar video { max-height:calc(100% - 290px); }
+.cut-trackrow { display:flex; align-items:center; gap:8px; }
+.cut-trackrow .cut-track { flex:1 1 auto; min-width:0; overflow:visible; }
+.cut-zoom { flex:0 0 auto; display:flex; gap:4px; }
+.cut-controls .cut-icon,.cut-icon { width:28px; padding:5px; display:grid; place-items:center; border:1px solid #3b4657; border-radius:5px; background:#111821; color:#c8d3e4; cursor:pointer; }
+.cut-icon svg { width:100%; height:100%; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.cut-icon:hover { border-color:#9b7cff; color:#fff; background:#2c2350; }
+.cut-scale { display:flex; justify-content:space-between; color:#7f8ba0; font:10px "DM Mono",monospace; margin-top:-4px; }
+.cut-range.is-clipped-start { border-left-width:0; }
+.cut-range.is-clipped-end { border-right-width:0; }
+.cut-range.is-clipped-start .cut-handle.is-start,.cut-range.is-clipped-end .cut-handle.is-end { display:none; }
+body.light .cut-icon { background:#fff; border-color:#c7d0df; color:#4c5d75; }
+body.light .cut-icon:hover { background:#eee8ff; border-color:#7655cc; color:#5935b5; }
+body.light .cut-scale { color:#6b7a90; }
+.cut-track { height:64px; overflow:hidden; }
+.cut-trackrow .cut-track { overflow:visible; }
+.cut-wave { position:absolute; inset:0; width:100%; height:100%; border-radius:6px; pointer-events:none; }
+.cut-wave-note { position:absolute; left:10px; top:50%; transform:translateY(-50%); color:#7f8ba0; font:11px "DM Mono",monospace; pointer-events:none; }
+.cut-range { background:rgba(225,75,110,.3); }
+.video-stage.has-cut-bar video { max-height:calc(100% - 326px); }
+body.light .cut-range { background:rgba(217,72,111,.22); }

@@ -78,3 +78,20 @@ test('время для подписи показывается с десяты�
   assert.equal(core.formatClock(12.46), '00:12.4');
   assert.equal(core.formatClock(3723.5), '1:02:03.5');
 });
+
+test('окно полосы приближается вокруг точки и не выходит за ролик', () => {
+  const full = core.fullView(100);
+  const zoomed = core.zoomView(full, 0.5, 25, 100);
+  assert.deepEqual(zoomed, { start: 12.5, span: 50 });
+  assert.deepEqual(core.zoomView(zoomed, 0.0001, 30, 100).span, core.MIN_VIEW_SPAN);
+  assert.deepEqual(core.zoomView(zoomed, 10, 30, 100), { start: 0, span: 100 });
+  assert.deepEqual(core.clampView({ start: 90, span: 50 }, 100), { start: 50, span: 50 });
+});
+
+test('окно сдвигается к времени вне его и подгоняется под отрезок', () => {
+  const view = { start: 10, span: 20 };
+  assert.equal(core.revealView(view, 15, 100), view);
+  assert.deepEqual(core.revealView(view, 60, 100), { start: 58, span: 20 });
+  const range = core.viewForRange(40, 50, 100);
+  assert.ok(range.start < 40 && range.start + range.span > 50 && range.span < 15);
+});

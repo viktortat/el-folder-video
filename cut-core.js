@@ -154,7 +154,40 @@ function formatClock(secondsValue) {
   return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${rest}` : `${String(minutes).padStart(2, '0')}:${rest}`;
 }
 
+// Видимое окно полосы вырезки: {start, span} в секундах.
+const MIN_VIEW_SPAN = 0.5;
+
+function clampView(view, duration) {
+  const span = Math.min(duration, Math.max(Math.min(MIN_VIEW_SPAN, duration), view.span));
+  const start = Math.min(Math.max(0, duration - span), Math.max(0, view.start));
+  return { start, span };
+}
+
+function fullView(duration) { return { start: 0, span: duration }; }
+
+// Масштаб вокруг секунды anchor: она остаётся на том же месте полосы. factor < 1 — приближение.
+function zoomView(view, factor, anchor, duration) {
+  const span = Math.min(duration, Math.max(Math.min(MIN_VIEW_SPAN, duration), view.span * factor));
+  const fraction = view.span > 0 ? (anchor - view.start) / view.span : 0.5;
+  return clampView({ start: anchor - fraction * span, span }, duration);
+}
+
+// Если секунда вне окна, сдвигает окно так, чтобы она оказалась ближе к левому краю; иначе не меняет.
+function revealView(view, seconds, duration) {
+  if (seconds >= view.start && seconds <= view.start + view.span) return view;
+  return clampView({ start: seconds - view.span * 0.1, span: view.span }, duration);
+}
+
+// Окно, в которое помещается отрезок [a, b] с небольшими полями.
+function viewForRange(a, b, duration) {
+  const low = Math.min(a, b);
+  const high = Math.max(a, b);
+  const pad = Math.max((high - low) * 0.1, 0.05);
+  return clampView({ start: low - pad, span: high - low + pad * 2 }, duration);
+}
+
 const cutCore = {
+  MIN_VIEW_SPAN, clampView, fullView, zoomView, revealView, viewForRange,
   MIN_RANGE_SECONDS, MIN_REMAINDER_SECONDS, normalizeRanges, snapRangesToKeyframes, keepSegments, removedSeconds, remainderSeconds,
   validateCut, remapTime, buildConcatList, reencodeCodecArguments, buildCopyArguments, buildReencodeArguments, formatClock
 };
