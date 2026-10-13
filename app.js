@@ -1507,7 +1507,7 @@
     var info = $("#cutInfo");
     if (info) info.textContent = cutInfoText(tab);
     var run = $("#cutRun");
-    if (run) { var cut = cutModel(tab); run.disabled = !cut.ranges.length || Boolean(state.cutJob); run.textContent = "Вырезать" + (cut.ranges.length ? " (" + cut.ranges.length + ")" : "") + " · X"; }
+    if (run) { var cut = cutModel(tab); run.disabled = !cut.ranges.length || Boolean(state.cutJob); run.title = "Вырезать отмеченные фрагменты" + (cut.ranges.length ? " (" + cut.ranges.length + ")" : "") + " (X)"; run.setAttribute("aria-label", run.title); }
   }
   function placeCutPlayhead(tab, player) {
     var head = $("#cutPlayhead");
@@ -1618,10 +1618,10 @@
     bar.innerHTML = '<div class="cut-trackrow"><div id="cutTrack" class="cut-track" role="group" aria-label="Полоса фрагментов для вырезки">' + waveLayer + ranges + pending + '<div id="cutPlayhead" class="cut-playhead"></div></div>' +
       '<div class="cut-zoom"><button type="button" id="cutZoomOut" class="cut-icon" title="Отдалить (−)" aria-label="Отдалить">' + icon(lens + '<path d="M8 11h6"/>') + '</button><button type="button" id="cutZoomIn" class="cut-icon" title="Приблизить (+, Ctrl+колесо)" aria-label="Приблизить">' + icon(lens + '<path d="M11 8v6M8 11h6"/>') + '</button><button type="button" id="cutZoomRange" class="cut-icon" title="Приблизить к выборке" aria-label="Приблизить к выборке">' + icon('<path d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"/><path d="M9 12h6"/>') + '</button><button type="button" id="cutZoomFit" class="cut-icon" title="Показать весь ролик" aria-label="Показать весь ролик">' + icon('<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>') + '</button></div></div>' +
       '<div class="cut-scale" aria-hidden="true"><span>' + cutClock(view.start) + '</span><span>окно ' + cutClock(view.span) + '</span><span>' + cutClock(view.start + view.span) + '</span></div>' +
-      '<div class="cut-controls"><button type="button" id="cutMarkStart" title="Начало фрагмента (I)" aria-label="Начало фрагмента">[ Начало</button><button type="button" id="cutMarkEnd" title="Конец фрагмента (O)" aria-label="Конец фрагмента">Конец ]</button><span class="cut-chips">' + chips + '</span>' +
-      '<button type="button" id="cutPreview" title="Проиграть место склейки" aria-label="Проиграть место склейки"' + (cut.ranges.length ? "" : " disabled") + '>Просмотр</button>' +
+      '<div class="cut-controls"><button type="button" id="cutMarkStart" class="cut-icon" title="Начало фрагмента (I)" aria-label="Начало фрагмента">' + icon('<path d="M8 4H5v16h3M10 12h9M15 8l4 4-4 4"/>') + '</button><button type="button" id="cutMarkEnd" class="cut-icon" title="Конец фрагмента (O)" aria-label="Конец фрагмента">' + icon('<path d="M16 4h3v16h-3M14 12H5M9 8l-4 4 4 4"/>') + '</button><span class="cut-chips">' + chips + '</span>' +
+      '<button type="button" id="cutPreview" class="cut-icon" title="Проиграть место склейки" aria-label="Проиграть место склейки"' + (cut.ranges.length ? "" : " disabled") + '>' + icon('<path d="M7 5v14l12-7z"/>') + '</button>' +
       '<label class="cut-precise" title="Перекодировать для точности до кадра: медленнее, но границы ровно там, где отмечены"><input type="checkbox" id="cutPrecise"' + (cut.precise ? " checked" : "") + ' aria-label="Точно (перекодировать)"> Точно</label>' +
-      '<button type="button" id="cutRun" class="cut-run" title="Вырезать отмеченные фрагменты (X)" aria-label="Вырезать отмеченные фрагменты"></button><button type="button" id="cutClose" title="Закрыть панель вырезки" aria-label="Закрыть панель вырезки">✕</button></div>' +
+      '<button type="button" id="cutRun" class="cut-run cut-icon" title="Вырезать отмеченные фрагменты (X)" aria-label="Вырезать отмеченные фрагменты">' + icon('<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/>') + '</button><button type="button" id="cutClose" title="Закрыть панель вырезки" aria-label="Закрыть панель вырезки">✕</button></div>' +
       '<div id="cutInfo" class="cut-info" role="status"></div>';
     updateCutInfo(tab); placeCutPlayhead(tab, player); drawCutWave(tab);
     $("#cutMarkStart").addEventListener("click", function() { cutMarkStart(tab, player); });
