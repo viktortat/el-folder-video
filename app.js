@@ -26,7 +26,7 @@
     stripCache: new Map(), stripPending: new Map(), frameCache: new Map(), favoriteThumbnailCache: new Map(), durationCache: new Map(), captureVideos: new Map(), task: 0, thumbnailGeneration: 0, thumbnailPriority: 0,
     recentFolders: JSON.parse(localStorage.getItem("folder-video-recent") || "[]"),
     pinnedFolders: JSON.parse(localStorage.getItem("folder-video-pinned") || "[]"),
-    favorites: JSON.parse(localStorage.getItem("folder-video-favorites") || "[]"), favoritesOpen: false, favoritesOnly: false,
+    favorites: JSON.parse(localStorage.getItem("folder-video-favorites") || "[]"), favoritesOpen: false, favoritesOnly: false, favoritesFolderOnly: false,
     recentVideos: JSON.parse(localStorage.getItem("folder-video-recent-videos") || "[]"), recentThumbnailCache: new Map(), recentVideosOpen: false,
     speedUp: null, transcript: null,
     metadataCollapsed: false, gridCollapsed: false,
@@ -216,17 +216,25 @@
       thumb.classList.add("ready");
     }
   }
+  function inCurrentFolder(video) {
+    var folder = (state.folderPath || "").replace(/[\\/]+$/, "").toLowerCase().replace(/\//g, "\\");
+    var file = String(video.path).toLowerCase().replace(/\//g, "\\");
+    return !!folder && file.indexOf(folder + "\\") === 0;
+  }
   function renderFavoritesPanel() {
     closeFavorites(); state.favoritesOpen = true;
     var overlay = document.createElement("div");
     overlay.id = "favoritesOverlay"; overlay.className = "favorites-overlay";
-    var items = state.favorites.map(function(video) {
+    var folderOnly = state.favoritesFolderOnly && !!state.folderPath;
+    var shown = folderOnly ? state.favorites.filter(inCurrentFolder) : state.favorites;
+    var items = shown.map(function(video) {
       return "<li class=\"favorite-item\" data-path=\"" + escapeHtml(video.path) + "\"><button class=\"favorite-open\" data-path=\"" + escapeHtml(video.path) + "\" title=\"" + escapeHtml(video.name + "\n" + video.path) + "\" aria-label=\"Открыть видео: " + escapeHtml(video.name) + "\"><span class=\"favorite-thumb\" aria-hidden=\"true\"><span class=\"favorite-thumb-placeholder\">▶</span></span><span class=\"favorite-copy\"><strong>" + escapeHtml(video.name) + "</strong><span>" + escapeHtml(video.path) + "</span></span></button><button class=\"favorite-remove\" data-path=\"" + escapeHtml(video.path) + "\" title=\"Удалить из избранного\" aria-label=\"Удалить из избранного\">♥</button></li>";
     }).join("");
-    overlay.innerHTML = "<section class=\"favorites-panel\" role=\"dialog\" aria-modal=\"true\" aria-label=\"Избранные видео\"><header><strong>Избранное</strong><span>" + state.favorites.length + "</span><button id=\"closeFavorites\" title=\"Закрыть избранное\" aria-label=\"Закрыть избранное\">×</button></header>" + (items ? "<ul>" + items + "</ul>" : "<p class=\"favorites-empty\">Пока нет добавленных видео.</p>") + "</section>";
+    overlay.innerHTML = "<section class=\"favorites-panel\" role=\"dialog\" aria-modal=\"true\" aria-label=\"Избранные видео\"><header><strong>Избранное</strong><span>" + (folderOnly ? shown.length + " / " : "") + state.favorites.length + "</span><button id=\"favoritesFolderOnly\" class=\"favorites-folder-filter" + (folderOnly ? " is-active" : "") + "\" type=\"button\" title=\"" + (state.folderPath ? (folderOnly ? "Показать все избранные" : "Показать избранные только из текущей папки") : "Сначала откройте папку") + "\" aria-label=\"Только избранные из текущей папки\" aria-pressed=\"" + folderOnly + "\"" + (state.folderPath ? "" : " disabled") + ">▤</button><button id=\"closeFavorites\" title=\"Закрыть избранное\" aria-label=\"Закрыть избранное\">×</button></header>" + (items ? "<ul>" + items + "</ul>" : "<p class=\"favorites-empty\">" + (folderOnly ? "В этой папке нет избранных видео." : "Пока нет добавленных видео.") + "</p>") + "</section>";
     overlay.addEventListener("click", function(event) { if (event.target === overlay) closeFavorites(); });
     document.body.appendChild(overlay);
     $("#closeFavorites").addEventListener("click", closeFavorites);
+    $("#favoritesFolderOnly").addEventListener("click", function() { state.favoritesFolderOnly = !state.favoritesFolderOnly; renderFavoritesPanel(); });
     overlay.querySelectorAll(".favorite-remove").forEach(function(button) { button.addEventListener("click", function() { toggleFavorite({ path: button.dataset.path }); renderActiveView(); renderFavoritesPanel(); }); });
     overlay.querySelectorAll(".favorite-open").forEach(function(button) { button.addEventListener("click", function() { openFavorite(button.dataset.path); }); });
     overlay.querySelectorAll(".favorite-item").forEach(function(item) {
