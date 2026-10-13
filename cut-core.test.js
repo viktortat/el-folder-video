@@ -23,20 +23,29 @@ test('проверка вырезки сообщает о пустом выбо�
   assert.equal(core.validateCut([{ start: 10, end: 20 }], 60), null);
 });
 
-test('конец вырезки привязывается к ключевому кадру не позже заданного', () => {
+test('конец вырезки переносится на ближайший ключевой кадр — назад или вперёд', () => {
   const keyframes = [0, 2, 4, 6, 8, 10, 12];
-  const { ranges, skipped } = core.snapRangesToKeyframes([{ start: 3, end: 9.5 }], keyframes, 14);
-  assert.deepEqual(ranges, [{ start: 3, end: 8 }]);
-  assert.deepEqual(skipped, []);
+  assert.deepEqual(core.snapRangesToKeyframes([{ start: 3, end: 8.8 }], keyframes, 14).ranges, [{ start: 3, end: 8 }]);
+  assert.deepEqual(core.snapRangesToKeyframes([{ start: 3, end: 9.5 }], keyframes, 14).ranges, [{ start: 3, end: 10 }]);
 });
 
-test('диапазон без ключевого кадра внутри пропускается, а хвост ключевых кадров не нужен', () => {
-  const keyframes = [0, 10, 20];
-  const short = core.snapRangesToKeyframes([{ start: 12, end: 15 }], keyframes, 30);
-  assert.deepEqual(short.ranges, []);
-  assert.deepEqual(short.skipped, [{ start: 12, end: 15 }]);
-  const tail = core.snapRangesToKeyframes([{ start: 12, end: 30 }], keyframes, 30);
-  assert.deepEqual(tail.ranges, [{ start: 12, end: 30 }]);
+test('короткий фрагмент без ключевого кадра внутри расширяется до следующего', () => {
+  const short = core.snapRangesToKeyframes([{ start: 0, end: 1.8 }], [0, 4.17, 8.34], 30);
+  assert.deepEqual(short.ranges, [{ start: 0, end: 4.17 }]);
+  assert.deepEqual(short.skipped, []);
+  const middle = core.snapRangesToKeyframes([{ start: 12, end: 15 }], [0, 10, 20], 30);
+  assert.deepEqual(middle.ranges, [{ start: 12, end: 20 }]);
+});
+
+test('фрагмент пропускается, только если после него нет ключевых кадров; хвост ключевых кадров не требует', () => {
+  const none = core.snapRangesToKeyframes([{ start: 22, end: 25 }], [0, 10, 20], 30);
+  assert.deepEqual(none.ranges, []);
+  assert.deepEqual(none.skipped, [{ start: 22, end: 25 }]);
+  assert.deepEqual(core.snapRangesToKeyframes([{ start: 12, end: 30 }], [0, 10, 20], 30).ranges, [{ start: 12, end: 30 }]);
+});
+
+test('расширенные фрагменты, наехавшие друг на друга, сливаются', () => {
+  assert.deepEqual(core.snapRangesToKeyframes([{ start: 1, end: 2 }, { start: 3, end: 4 }], [0, 5, 10], 20).ranges, [{ start: 1, end: 5 }]);
 });
 
 test('время переносится на новое видео, а внутри вырезанного даёт null', () => {

@@ -1486,7 +1486,9 @@
     var plan = cut.plan;
     var removed = window.CutCore.removedSeconds(plan.ranges);
     var text = "Будет удалено " + cutClock(removed) + " (" + plan.ranges.map(function(range) { return cutClock(range.start) + " → " + cutClock(range.end); }).slice(0, 3).join("; ") + (plan.ranges.length > 3 ? "…" : "") + "), останется " + cutClock(plan.remainder) + ".";
-    if (plan.skipped.length) text += " Слишком короткие для копирования: " + plan.skipped.length + " — включите «Точно».";
+    var requested = window.CutCore.removedSeconds(window.CutCore.normalizeRanges(cut.ranges, plan.duration));
+    if (!plan.precise && Math.abs(removed - requested) >= 0.05) text += " Отмечено " + cutClock(requested) + ": без перекодирования конец сдвинут к ключевому кадру. Для точной границы включите «Точно».";
+    if (plan.skipped.length) text += " Пропущено фрагментов: " + plan.skipped.length + " (после них нет ключевых кадров) — включите «Точно».";
     return text;
   }
   function scheduleCutPlan(tab) {

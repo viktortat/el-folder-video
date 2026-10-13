@@ -24,18 +24,23 @@ function normalizeRanges(ranges, duration) {
   return merged;
 }
 
-// Ключевые кадры: удаляемый диапазон заканчивается на ближайшем ключевом кадре не позже заданного конца,
-// чтобы остаток начинался с чистого кадра и не терялось то, что пользователь не отмечал.
-// Диапазон, в который не попадает ни один ключевой кадр после начала, пропускается.
+// Ключевые кадры: остаток после вырезанного должен начинаться с ключевого кадра, поэтому конец диапазона
+// переносится на ближайший к нему ключевой кадр — назад (внутри диапазона) или вперёд. Короткий диапазон без
+// ключевого кадра внутри расширяется до следующего. Пропускается диапазон, после которого ключевых кадров нет.
 function snapRangesToKeyframes(ranges, keyframes, duration) {
   const frames = (Array.isArray(keyframes) ? keyframes : []).filter(finite).sort((a, b) => a - b);
   const snapped = [];
   const skipped = [];
   normalizeRanges(ranges, duration).forEach(range => {
     if (finite(duration) && range.end >= duration - 1e-3) { snapped.push({ start: range.start, end: duration, requestedEnd: range.end }); return; }
-    let end = null;
-    for (let index = frames.length - 1; index >= 0; index--) if (frames[index] <= range.end + 1e-3) { end = frames[index]; break; }
-    if (end === null || end - range.start < MIN_RANGE_SECONDS) skipped.push(range);
+    // Ключевой кадр не позже конца годится, только если внутри фрагмента; иначе берётся следующий после конца.
+    let before = null;
+    for (let index = frames.length - 1; index >= 0; index--) if (frames[index] <= range.end + 1e-3) { before = frames[index]; break; }
+    if (before !== null && before - range.start < MIN_RANGE_SECONDS) before = null;
+    const after = frames.find(frame => frame > range.end + 1e-3);
+    let end = before;
+    if (after !== undefined && (end === null || after - range.end < range.end - end)) end = after;
+    if (end === null) skipped.push(range);
     else snapped.push({ start: range.start, end, requestedEnd: range.end });
   });
   return { ranges: normalizeRanges(snapped, duration).map(range => ({ start: range.start, end: range.end })), skipped };

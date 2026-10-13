@@ -88,7 +88,7 @@ async function planCut({ sourcePath, ranges, duration, precise, keyframes }) {
     }
     ({ ranges: effective, skipped } = core.snapRangesToKeyframes(ranges, frames, duration));
   }
-  if (!effective.length) throw new Error('Выбранные фрагменты короче интервала между ключевыми кадрами. Включите режим «Точно».');
+  if (!effective.length) throw new Error('После выбранных фрагментов нет ключевых кадров, без перекодирования их не вырезать. Включите режим «Точно».');
   const problemAfter = core.validateCut(effective, duration);
   if (problemAfter) throw new Error(problemAfter);
   return { precise: Boolean(precise), duration, ranges: effective, skipped, keep: core.keepSegments(effective, duration), remainder: core.remainderSeconds(effective, duration) };
@@ -117,7 +117,7 @@ function executeCut({ sourcePath, outputPath, plan, onProgress }) {
       else {
         workDirectory = await mkdtemp(path.join(os.tmpdir(), 'folder-video-cut-'));
         const listFile = path.join(workDirectory, 'segments.txt');
-        await writeFile(listFile, core.buildConcatList(sourcePath, plan.keep), 'utf8');
+        await writeFile(listFile, core.buildConcatList(path.resolve(sourcePath), plan.keep), 'utf8');
         arguments_ = core.buildCopyArguments(listFile, outputPath, extension);
       }
       if (canceled) throw cancelError();
