@@ -14,6 +14,14 @@ class VideoMetadataStore {
       return { schemaVersion: 1, contentHash, title: path.parse(fileName).name, originalFileName: fileName, youtubeUrl: '', obsidianUrl: '', projectFolder: '', descriptionMarkdown: '', tags: [], createdAt: null, updatedAt: null };
     }
   }
+  // Переносит запись на новый хэш содержимого (после вырезки); существующую запись нового хэша не затирает.
+  async copy(fromHash, toHash, fileName) {
+    const target = await this.load(toHash, fileName);
+    if (target.createdAt) return target;
+    const source = await this.load(fromHash, fileName);
+    if (!source.createdAt) return null;
+    return this.save({ ...source, contentHash: toHash, originalFileName: fileName });
+  }
   async save(metadata) {
     await mkdir(this.directory, { recursive: true });
     const current = await this.load(metadata.contentHash, metadata.originalFileName || 'video');

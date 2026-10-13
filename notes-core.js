@@ -47,6 +47,30 @@ function upsertNote(source, start, text, blockIndex = null) {
   return blocks.length ? `${blocks.join('\n---\n')}\n` : '';
 }
 
-const notesCore = { formatNoteTime, parseNotes, activeNote, upsertNote };
+// Пересчитывает метки заметок после вырезки диапазонов [start, end) из исходного видео.
+// Заметки, начало которых попало в вырезанное, удаляются; блоки без метки остаются как есть.
+function shiftNotes(source, ranges) {
+  const cuts = (Array.isArray(ranges) ? ranges : []).slice().sort((a, b) => a.start - b.start);
+  const kept = [];
+  noteBlocks(source).forEach(block => {
+    const [header, ...lines] = block.split('\n');
+    const match = /^\[(\d+(?::\d{1,2}){1,2})\](?:[ \t]*(.*))?$/.exec(header.trim());
+    const start = match ? noteSeconds(match[1]) : null;
+    if (start === null) { kept.push(block); return; }
+    let shift = 0;
+    let removed = false;
+    for (const range of cuts) {
+      if (start >= range.end) shift += range.end - range.start;
+      else if (start >= range.start) { removed = true; break; }
+      else break;
+    }
+    if (removed) return;
+    const text = [match[2] || '', ...lines].join('\n').trim();
+    if (text) kept.push(`[${formatNoteTime(start - shift)}]\n${text}`);
+  });
+  return kept.length ? `${kept.join('\n---\n')}\n` : '';
+}
+
+const notesCore = { formatNoteTime, parseNotes, activeNote, upsertNote, shiftNotes };
 if (typeof module !== 'undefined' && module.exports) module.exports = notesCore;
 else globalThis.NotesCore = notesCore;

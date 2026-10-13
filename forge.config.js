@@ -3,7 +3,7 @@ module.exports = {
     asar: true,
     executableName: 'folder-video',
     icon: './assets/folder-video.ico',
-    ignore: /(thumbnail-queue|summary-core|notes-core)\.test\.js$/,
+    ignore: /(thumbnail-queue|summary-core|notes-core|cut-core|cut-ffmpeg|cut-undo|move-file-conflict|video-metadata-store)\.test\.js$/,
     extraResource: [
       'scripts/transcribe_handy.py',
       'tools/transcribe-cpp/transcribe-native-windows-x86_64-cpu-vulkan'

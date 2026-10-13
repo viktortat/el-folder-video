@@ -29,6 +29,17 @@ contextBridge.exposeInMainWorld('folderVideo', {
     ipcRenderer.on('folder-video:speed-up-progress', listener);
     return () => ipcRenderer.removeListener('folder-video:speed-up-progress', listener);
   },
+  planCut: (filePath, ranges, precise) => ipcRenderer.invoke('folder-video:cut-plan', filePath, ranges, precise),
+  startCut: (filePath, operationId, ranges, precise) => ipcRenderer.invoke('folder-video:cut-start', filePath, operationId, ranges, precise),
+  cancelCut: operationId => ipcRenderer.invoke('folder-video:cut-cancel', operationId),
+  undoCut: undoId => ipcRenderer.invoke('folder-video:cut-undo', undoId),
+  listCutBackups: () => ipcRenderer.invoke('folder-video:cut-list-backups'),
+  clearCutBackups: () => ipcRenderer.invoke('folder-video:cut-clear-backups'),
+  onCutProgress: callback => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on('folder-video:cut-progress', listener);
+    return () => ipcRenderer.removeListener('folder-video:cut-progress', listener);
+  },
   loadTranscript: filePath => ipcRenderer.invoke('folder-video:transcript-load', filePath),
   startTranscript: (filePath, operationId) => ipcRenderer.invoke('folder-video:transcript-start', filePath, operationId),
   cancelTranscript: operationId => ipcRenderer.invoke('folder-video:transcript-cancel', operationId),

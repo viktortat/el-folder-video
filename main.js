@@ -7,6 +7,10 @@ const { pathToFileURL } = require('node:url');
 const { VideoMetadataStore } = require('./video-metadata-store');
 const { hashFile } = require('./hash-file');
 const { createSameFileMoveConflict } = require('./move-file-conflict');
+const { UNDO_DIRECTORY, CutUndoStore } = require('./cut-undo');
+const { reencodeCodecArguments } = require('./cut-core');
+const { probeDuration, listKeyframes, planCut, executeCut } = require('./cut-ffmpeg');
+const { shiftNotes } = require('./notes-core');
 const { srtSegments, transcriptBatches, normalizeSummary, FRAME_COUNT, frameTimes, parseVideoLink, parseRegValue, playerLaunch, safeNoteName, buildObsidianArticle, buildObsidianAddendum } = require('./summary-core');
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.avi', '.mkv', '.m4v', '.ogv']);
@@ -43,6 +47,7 @@ function defaultSettings() {
     storage: { metadataDirectory: path.join(app.getPath('documents'), 'folder-video-metadata'), gitRepositoryUrl: '', obsidianInbox: 'C:\\_ObsidianDB\\ai-study\\00 Inbox' },
     viewer: { columns: 3, seconds: 10, scroll: 'center', panelWidth: 410 },
     interface: { metadataCollapsed: false, gridCollapsed: false },
+    cut: { replaceOriginal: true },
     transcription: { modelPath: '' },
     ai: { model: 'deepseek-flash', apiKey: '', keyConfigured: false, clearKey: false }
   };
@@ -65,6 +70,7 @@ function normalizeSettings(value) {
     theme: source.theme === 'light' ? 'light' : 'dark',
     storage: { metadataDirectory, gitRepositoryUrl, obsidianInbox }, viewer: { columns, seconds, scroll, panelWidth },
     interface: { metadataCollapsed: source.interface?.metadataCollapsed === true, gridCollapsed: source.interface?.gridCollapsed === true },
+    cut: { replaceOriginal: source.cut?.replaceOriginal !== false },
     transcription: { modelPath: typeof source.transcription?.modelPath === 'string' ? source.transcription.modelPath.trim() : '' },
     ai: { model: typeof source.ai?.model === 'string' && source.ai.model.trim() ? source.ai.model.trim() : 'deepseek-flash', apiKey: '', keyConfigured: false, clearKey: false }
   };
@@ -537,14 +543,7 @@ async function exportSummaryToObsidian(filePath, duration, mode = 'create') {
   return { path: target, frames: frames.length, warning };
 }
 
-function speedUpCodecArguments(extension) {
-  switch (extension.toLowerCase()) {
-    case '.webm': return ['-c:v', 'libvpx-vp9', '-c:a', 'libopus'];
-    case '.ogv': return ['-c:v', 'libtheora', '-c:a', 'libvorbis'];
-    case '.avi': return ['-c:v', 'mpeg4', '-c:a', 'libmp3lame'];
-    default: return ['-c:v', 'libx264', '-c:a', 'aac'];
-  }
-}
+function speedUpCodecArguments(extension) { return reencodeCodecArguments(extension); }
 
 function runFfmpeg(arguments_, onProgress) {
   return new Promise((resolve, reject) => {
@@ -662,7 +661,7 @@ async function scanFolder(root, recursive) {
         continue;
       }
       if (entry.isDirectory()) {
-        if (recursive) await walk(entryPath);
+        if (recursive && entry.name !== UNDO_DIRECTORY) await walk(entryPath);
         continue;
       }
       if (!entry.isFile() || !VIDEO_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue;
@@ -1014,6 +1013,100 @@ ipcMain.handle('folder-video:speed-up', async (event, sourcePath, operationId, d
   } catch (error) { return { error: error.message || 'Не удалось ускорить видео' }; }
 });
 
+// --- Вырезка фрагментов ---
+const CUT_BACKUP_DAYS = 7;
+let cutUndoStore;
+let cutJob = null;
+function openCutUndoStore() { cutUndoStore = new CutUndoStore(path.join(app.getPath('userData'), 'cut-backups.json')); cutUndoStore.prune(CUT_BACKUP_DAYS * 24 * 3600 * 1000).catch(() => {}); }
+
+async function validateCutSource(filePath) {
+  if (typeof filePath !== 'string' || !VIDEO_EXTENSIONS.has(path.extname(filePath).toLowerCase())) throw new Error('Некорректный путь к видео');
+  const info = await lstat(filePath);
+  if (!info.isFile()) throw new Error('Указанный путь не является файлом');
+}
+function cleanRanges(ranges) {
+  if (!Array.isArray(ranges) || ranges.length > 500) throw new Error('Некорректный список фрагментов');
+  return ranges.map(range => ({ start: Number(range && range.start), end: Number(range && range.end) }));
+}
+async function uniqueCutOutput(filePath) {
+  const parsed = path.parse(filePath);
+  for (let index = 1; ; index++) {
+    const candidate = path.join(parsed.dir, `${parsed.name} (cut${index > 1 ? ` ${index}` : ''})${parsed.ext}`);
+    try { await lstat(candidate); } catch (error) { if (error.code === 'ENOENT') return candidate; throw error; }
+  }
+}
+
+// Ключевые кадры читаются долго на больших файлах, поэтому запоминаем последние результаты.
+const keyframeCache = new Map();
+async function cachedKeyframes(filePath) {
+  const info = await lstat(filePath);
+  const key = `${filePath}|${info.size}|${info.mtimeMs}`;
+  if (!keyframeCache.has(key)) {
+    keyframeCache.set(key, await listKeyframes(filePath));
+    if (keyframeCache.size > 5) keyframeCache.delete(keyframeCache.keys().next().value);
+  }
+  return keyframeCache.get(key);
+}
+
+ipcMain.handle('folder-video:cut-plan', async (_event, filePath, ranges, precise) => {
+  try {
+    await validateCutSource(filePath);
+    const duration = await probeDuration(filePath);
+    const plan = await planCut({ sourcePath: filePath, ranges: cleanRanges(ranges), duration, precise: Boolean(precise), keyframes: precise ? undefined : await cachedKeyframes(filePath).catch(() => undefined) });
+    return { plan };
+  } catch (error) { return { error: error.message || 'Не удалось подготовить вырезку', code: error.code }; }
+});
+
+ipcMain.handle('folder-video:cut-start', async (event, filePath, operationId, ranges, precise) => {
+  if (typeof operationId !== 'string' || !operationId) return { error: 'Некорректная операция' };
+  if (cutJob) return { error: 'Вырезка уже выполняется' };
+  const replaceOriginal = appSettings.cut ? appSettings.cut.replaceOriginal !== false : true;
+  const sendProgress = percent => { if (!event.sender.isDestroyed()) event.sender.send('folder-video:cut-progress', { operationId, percent: Math.round(percent) }); };
+  const job = { operationId, cancel: () => {} };
+  cutJob = job;
+  let temporary = null;
+  try {
+    await validateCutSource(filePath);
+    const duration = await probeDuration(filePath);
+    const plan = await planCut({ sourcePath: filePath, ranges: cleanRanges(ranges), duration, precise: Boolean(precise), keyframes: precise ? undefined : await cachedKeyframes(filePath).catch(() => undefined) });
+    temporary = `${filePath}.fv-cut-${Date.now()}.tmp`;
+    sendProgress(0);
+    const run = executeCut({ sourcePath: filePath, outputPath: temporary, plan, onProgress: sendProgress });
+    job.cancel = run.cancel;
+    const executed = await run.promise;
+    if (!replaceOriginal) {
+      const outputPath = await uniqueCutOutput(filePath);
+      await rename(temporary, outputPath);
+      temporary = null;
+      sendProgress(100);
+      return { success: true, outputPath, replaced: false, duration: executed.duration, ranges: plan.ranges, skipped: plan.skipped };
+    }
+    const oldHash = await hashFile(filePath).catch(() => null);
+    const notesFile = notesPath(filePath);
+    await (notesSaveJobs.get(filePath) || Promise.resolve()).catch(() => {});
+    const entry = await cutUndoStore.commit({ sourcePath: filePath, tempPath: temporary, sidecars: [notesFile], ranges: plan.ranges, precise: plan.precise });
+    temporary = null;
+    try {
+      const notes = await readFile(notesFile, 'utf8');
+      const shifted = shiftNotes(notes, plan.ranges);
+      if (shifted !== notes) { if (shifted) await writeFile(notesFile, shifted, 'utf8'); else await rm(notesFile, { force: true }); }
+    } catch (error) { if (error.code !== 'ENOENT') console.error('Не удалось пересчитать заметки:', error.message); }
+    if (oldHash) hashFile(filePath).then(newHash => newHash !== oldHash ? metadataStore.copy(oldHash, newHash, path.basename(filePath)) : null).catch(() => {});
+    sendProgress(100);
+    return { success: true, outputPath: filePath, replaced: true, undoId: entry.id, duration: executed.duration, ranges: plan.ranges, skipped: plan.skipped };
+  } catch (error) {
+    if (temporary) await rm(temporary, { force: true }).catch(() => {});
+    return error.code === 'ECANCELED' ? { canceled: true } : { error: error.message || 'Не удалось вырезать фрагменты', code: error.code };
+  } finally { if (cutJob === job) cutJob = null; }
+});
+ipcMain.handle('folder-video:cut-cancel', (_event, operationId) => { if (cutJob && cutJob.operationId === operationId) { cutJob.cancel(); return true; } return false; });
+ipcMain.handle('folder-video:cut-undo', async (_event, undoId) => {
+  try { const entry = await cutUndoStore.undo(String(undoId)); return { success: true, outputPath: entry.sourcePath }; }
+  catch (error) { return { error: error.message || 'Не удалось отменить вырезку' }; }
+});
+ipcMain.handle('folder-video:cut-list-backups', async () => { try { return { backups: await cutUndoStore.list() }; } catch (error) { return { error: error.message }; } });
+ipcMain.handle('folder-video:cut-clear-backups', async () => { try { return { removed: await cutUndoStore.clear() }; } catch (error) { return { error: error.message }; } });
+
 ipcMain.handle('folder-video:transcript-load', async (_event, filePath) => loadTranscript(filePath));
 ipcMain.handle('folder-video:transcript-start', async (event, filePath, operationId) => {
   if (typeof operationId !== 'string' || !operationId) return { error: 'Некорректная операция' };
@@ -1091,6 +1184,7 @@ app.whenReady().then(async () => {
   }
   await loadSettings();
   openMetadataStore();
+  openCutUndoStore();
   createWindow();
   openLaunchTarget(process.argv);
   app.on('activate', () => {

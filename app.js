@@ -5,7 +5,7 @@
   const notesCore = window.NotesCore;
   const thumbnailQueue = new ThumbnailQueue(2);
   const supported = "MP4, WebM, MOV, AVI, MKV, M4V, OGV";
-  const DEFAULT_SETTINGS = { version: 1, theme: "dark", storage: { metadataDirectory: "", gitRepositoryUrl: "", obsidianInbox: "" }, viewer: { columns: 3, seconds: 10, scroll: "center", panelWidth: 410 }, interface: { metadataCollapsed: false, gridCollapsed: false }, transcription: { modelPath: "" }, ai: { model: "deepseek-flash", apiKey: "", keyConfigured: false, clearKey: false } };
+  const DEFAULT_SETTINGS = { version: 1, theme: "dark", storage: { metadataDirectory: "", gitRepositoryUrl: "", obsidianInbox: "" }, viewer: { columns: 3, seconds: 10, scroll: "center", panelWidth: 410 }, interface: { metadataCollapsed: false, gridCollapsed: false }, cut: { replaceOriginal: true }, transcription: { modelPath: "" }, ai: { model: "deepseek-flash", apiKey: "", keyConfigured: false, clearKey: false } };
   const SETTINGS_FIELDS = [
     { group: "Хранилище", key: "storage.metadataDirectory", label: "Каталог метаданных", type: "text", hint: "JSON-файлы и template.html" },
     { group: "Хранилище", key: "storage.gitRepositoryUrl", label: "Git-репозиторий", type: "text", hint: "URL удалённого репозитория" },
@@ -17,12 +17,13 @@
     { group: "Просмотр видео", key: "viewer.columns", label: "Колонки кадров", type: "select", options: [3, 4, 5, 6, 8] },
     { group: "Просмотр видео", key: "viewer.seconds", label: "Шаг кадров", type: "select", options: [5, 10, 15, 30, 60], suffix: "секунд" },
     { group: "Просмотр видео", key: "viewer.scroll", label: "Автопрокрутка", type: "select", options: [{ value: "center", label: "По центру" }, { value: "edge", label: "До ближайшего края" }, { value: "off", label: "Выключена" }] },
+    { group: "Вырезка фрагментов", key: "cut.replaceOriginal", label: "Заменять оригинал", type: "checkbox", hint: "Включено: оригинал уходит в .fv-undo рядом с видео и возвращается по Ctrl+Z. Выключено: результат сохраняется как «имя (cut).ext»." },
     { group: "Интерфейс", key: "interface.metadataCollapsed", label: "Сворачивать панель метаданных", type: "checkbox" },
     { group: "Интерфейс", key: "interface.gridCollapsed", label: "Сворачивать панель кадров", type: "checkbox" }
   ];
   const state = {
     folderPath: "", files: [], skipped: 0, recursive: false, hideEmptyFiles: false, recentDaysEnabled: localStorage.getItem("folder-video-recent-days-enabled") === "true", recentDays: normalizeRecentDays(localStorage.getItem("folder-video-recent-days")), filterText: "", sort: "date", asc: false, page: 1, pageSize: 10,
-    tabs: [{ id: "folder", type: "folder", label: "Видео" }], activeTab: "folder",
+    tabs: [{ id: "folder", type: "folder", label: "Видео" }], activeTab: "folder", cutJob: null, cutUndo: [], cutPreview: null,
     stripCache: new Map(), stripPending: new Map(), frameCache: new Map(), favoriteThumbnailCache: new Map(), durationCache: new Map(), captureVideos: new Map(), task: 0, thumbnailGeneration: 0, thumbnailPriority: 0,
     recentFolders: JSON.parse(localStorage.getItem("folder-video-recent") || "[]"),
     pinnedFolders: JSON.parse(localStorage.getItem("folder-video-pinned") || "[]"),
@@ -60,7 +61,7 @@
   function formatSize(bytes) { if (bytes < 1024) return bytes + " B"; if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB"; if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB"; return (bytes / 1073741824).toFixed(2) + " GB"; }
   function formatDate(value) { return new Date(value).toLocaleString([], { year: "2-digit", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }); }
   function formatTime(value) { if (!Number.isFinite(value)) return "—"; const h = Math.floor(value / 3600); const m = Math.floor((value % 3600) / 60); const s = Math.floor(value % 60); return h ? h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0") : m + ":" + String(s).padStart(2, "0"); }
-  function notice(message, info, onClick) { if (info === undefined) info = false; toastEl.textContent = message; toastEl.className = "toast show" + (info ? " info" : "") + (onClick ? " clickable" : ""); toastEl.onclick = onClick ? function() { toastEl.className = "toast"; onClick(); } : null; if (onClick) { toastEl.title = "Открыть в Obsidian"; toastEl.setAttribute("role", "button"); } else { toastEl.removeAttribute("title"); toastEl.removeAttribute("role"); } clearTimeout(toastTimer); toastTimer = setTimeout(function() { toastEl.className = "toast"; }, onClick ? 9000 : 3900); }
+  function notice(message, info, onClick, actionTitle) { if (info === undefined) info = false; toastEl.textContent = message; toastEl.className = "toast show" + (info ? " info" : "") + (onClick ? " clickable" : ""); toastEl.onclick = onClick ? function() { toastEl.className = "toast"; onClick(); } : null; if (onClick) { toastEl.title = actionTitle || "Открыть в Obsidian"; toastEl.setAttribute("role", "button"); } else { toastEl.removeAttribute("title"); toastEl.removeAttribute("role"); } clearTimeout(toastTimer); toastTimer = setTimeout(function() { toastEl.className = "toast"; }, onClick ? 9000 : 3900); }
   function fileKey(video) { return video.path + "|" + video.size + "|" + video.lastModified; }
   function active() { return state.tabs.find(function(tab) { return tab.id === state.activeTab; }); }
   function savePanelPreferences() {
@@ -500,10 +501,42 @@
   function renderSettings(tab) {
     var groups = SETTINGS_FIELDS.reduce(function(result, field) { (result[field.group] || (result[field.group] = [])).push(field); return result; }, {});
     var markup = Object.keys(groups).map(function(group) { return "<section class=\"settings-group\"><h2>" + escapeHtml(group) + "</h2>" + groups[group].map(function(field) { return "<label class=\"settings-row\"><span><strong>" + escapeHtml(field.label) + "</strong>" + (field.hint ? "<small>" + escapeHtml(field.hint) + "</small>" : "") + "</span>" + settingsControlMarkup(field, readSetting(tab.draft, field.key)) + "</label>"; }).join("") + "</section>"; }).join("");
-    view.innerHTML = "<section class=\"settings-view\"><form id=\"settingsForm\"><header class=\"settings-head\"><div><p>Настройки</p><h1>Параметры приложения</h1></div><span>Изменения применяются после сохранения</span></header>" + markup + "<footer class=\"settings-footer\"><span id=\"settingsState\">" + (tab.dirty ? "Есть несохранённые изменения" : "Сохранено") + "</span><button id=\"resetSettings\" type=\"button\" class=\"settings-reset\">Сбросить</button><button type=\"submit\" class=\"primary\">Сохранить</button></footer></form></section>";
+    view.innerHTML = "<section class=\"settings-view\"><form id=\"settingsForm\"><header class=\"settings-head\"><div><p>Настройки</p><h1>Параметры приложения</h1></div><span>Изменения применяются после сохранения</span></header>" + markup + "<section class=\"settings-group\"><h2>Бэкапы вырезки</h2><div id=\"cutBackups\" class=\"cut-backups\">Загрузка…</div></section><footer class=\"settings-footer\"><span id=\"settingsState\">" + (tab.dirty ? "Есть несохранённые изменения" : "Сохранено") + "</span><button id=\"resetSettings\" type=\"button\" class=\"settings-reset\">Сбросить</button><button type=\"submit\" class=\"primary\">Сохранить</button></footer></form></section>";
     $("#settingsForm").querySelectorAll("[data-setting]").forEach(function(control) { control.addEventListener("change", function() { var field = SETTINGS_FIELDS.find(function(item) { return item.key === control.dataset.setting; }); var value = field.type === "checkbox" ? control.checked : field.type === "select" && typeof readSetting(tab.draft, field.key) === "number" ? Number(control.value) : control.value; writeSetting(tab.draft, field.key, value); tab.dirty = true; $("#settingsState").textContent = "Есть несохранённые изменения"; }); });
     $("#resetSettings").addEventListener("click", async function() { if (!confirm("Сбросить настройки к значениям по умолчанию?")) return; var result = await window.folderVideo.getDefaultSettings(); tab.draft = result.settings; tab.dirty = true; renderSettings(tab); });
     $("#settingsForm").addEventListener("submit", function(event) { event.preventDefault(); saveSettingsTab(tab); });
+    renderCutBackups();
+  }
+  async function renderCutBackups() {
+    var box = $("#cutBackups");
+    if (!box) return;
+    var result = await window.folderVideo.listCutBackups();
+    box = $("#cutBackups");
+    if (!box) return;
+    if (!result || result.error) { box.textContent = "Не удалось прочитать список бэкапов: " + ((result && result.error) || "неизвестная ошибка"); return; }
+    var items = result.backups;
+    if (!items.length) { box.textContent = "Бэкапов нет. Оригиналы после вырезки хранятся в папке .fv-undo рядом с видео 7 дней."; return; }
+    box.innerHTML = '<ul class="cut-backup-list">' + items.map(function(item) {
+      var name = item.sourcePath.split(/[\\/]/).pop();
+      return '<li><span class="cut-backup-name" title="' + escapeHtml(item.sourcePath) + '">' + escapeHtml(name) + '</span><span class="cut-backup-meta">' + escapeHtml(formatDate(item.createdAt)) + ' · ' + formatSize(item.originalSize) + '</span><button type="button" class="settings-reset" data-restore="' + escapeHtml(item.id) + '"' + (item.available ? "" : " disabled") + ' title="Вернуть оригинал на место" aria-label="Восстановить ' + escapeHtml(name) + '">Восстановить</button></li>';
+    }).join("") + '</ul><button type="button" id="clearCutBackups" class="settings-reset" title="Удалить все бэкапы оригиналов" aria-label="Очистить бэкапы">Очистить бэкапы</button>';
+    box.querySelectorAll("[data-restore]").forEach(function(button) {
+      button.addEventListener("click", async function() {
+        var item = items.find(function(entry) { return entry.id === button.dataset.restore; });
+        if (!item) return;
+        button.disabled = true;
+        var restored = await undoCutEntry({ undoId: item.id, filePath: item.sourcePath });
+        if (restored) state.cutUndo = state.cutUndo.filter(function(entry) { return entry.undoId !== item.id; });
+        renderCutBackups();
+      });
+    });
+    $("#clearCutBackups").addEventListener("click", async function() {
+      if (!confirm("Удалить все бэкапы оригиналов? Вернуть вырезанное после этого будет нельзя.")) return;
+      var cleared = await window.folderVideo.clearCutBackups();
+      if (cleared && cleared.error) notice("Не удалось очистить бэкапы: " + cleared.error);
+      else { state.cutUndo = []; notice("Бэкапы удалены", true); }
+      renderCutBackups();
+    });
   }
   async function saveSettingsTab(tab) {
     var switchingDatabase = tab.draft.storage.metadataDirectory !== state.settings.storage.metadataDirectory;
@@ -861,7 +894,7 @@
     if (tab.summaryStatus === "running") window.folderVideo.cancelSummary(tab.video.path);
     releasePlayerResources(tab.video.url);
     if (tab.metadataRequestId) window.folderVideo.cancelMetadata(tab.metadataRequestId);
-    tab.video = video; tab.label = video.name; tab.currentTime = 0; tab.isDragging = false; tab.panelMode = "frames"; tab.transcriptStatus = null; tab.transcriptSegments = []; tab.transcriptError = ""; tab.transcriptProgress = 0; tab.summaryStatus = null; tab.summaryData = null; tab.summaryError = "";
+    tab.video = video; tab.label = video.name; tab.currentTime = 0; tab.cut = null; tab.isDragging = false; tab.panelMode = "frames"; tab.transcriptStatus = null; tab.transcriptSegments = []; tab.transcriptError = ""; tab.transcriptProgress = 0; tab.summaryStatus = null; tab.summaryData = null; tab.summaryError = "";
     tab.notesStatus = null; tab.notesText = ""; tab.notesDirty = false; tab.notesError = ""; tab.notesEditorCollapsed = true; tab.noteEditStart = null; tab.noteEditBlockIndex = null;
     tab.metadataStatus = "idle"; tab.metadata = null; tab.metadataDraft = null; tab.metadataDirty = false; tab.metadataRequestId = null; tab.markdownMode = "edit";
   }
@@ -1234,7 +1267,7 @@
     var prevDisabled = videoIndex <= 0;
     var nextDisabled = videoIndex === -1 || videoIndex >= playerVideoList().length - 1;
     var favorite = isFavorite(tab.video.path);
-    view.innerHTML = "<section class=\"player-view\"><div class=\"player-layout\"" + gs + "\"><div class=\"player-main\"><div class=\"video-bar\"><button id=\"back\" class=\"back\">◀ VIDEO LIST</button><span id=\"reveal\" class=\"video-path\" title=\"Открыть в Проводнике\">" + escapeHtml(tab.video.path) + "</span><button id=\"videoScreenshot\" class=\"video-action\" title=\"Сохранить скрин текущего кадра\" aria-label=\"Сохранить скрин текущего кадра\">SHOT</button><button id=\"copyVideoName\" class=\"video-action\" title=\"Скопировать название файла без расширения\" aria-label=\"Скопировать название файла без расширения\">COPY</button><button id=\"openOkoshko\" class=\"video-action\" title=\"Открыть в okoshko\" aria-label=\"Открыть в okoshko\"><svg viewBox=\"0 0 16 16\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><rect x=\"2\" y=\"3\" width=\"12\" height=\"10\" rx=\"1.5\"/><path d=\"M2 6h12\"/></svg></button><button id=\"openExternal\" class=\"open-external\" title=\"Открыть в системном плеере\" aria-label=\"Открыть в системном плеере\">▶</button></div><div class=\"video-stage\"><video id=\"player\" controls playsinline src=\"" + tab.video.url + "\"></video><nav class=\"video-switcher\" aria-label=\"Управление воспроизведением и переключение видео\"><button id=\"previousVideo\" type=\"button\" title=\"Предыдущее видео\" aria-label=\"Предыдущее видео\" " + (prevDisabled ? "disabled" : "") + ">‹ Prev</button><button id=\"togglePlayback\" class=\"toggle-playback\" type=\"button\" title=\"Воспроизвести (Space)\" aria-label=\"Воспроизвести\" aria-pressed=\"false\"><span aria-hidden=\"true\">▶</span></button><button id=\"nextVideo\" type=\"button\" title=\"Следующее видео\" aria-label=\"Следующее видео\" " + (nextDisabled ? "disabled" : "") + ">Next ›</button></nav></div></div><aside id=\"gridPanel\" class=\"grid-panel" + (tab.collapsed ? " collapsed" : "") + "\"><header class=\"grid-head\"><button id=\"collapse\" class=\"collapse\" title=\"Свернуть панель\">" + (tab.collapsed ? "◀" : "▶") + "</button><div class=\"grid-control\"><label>Col</label><select id=\"columns\">" + [3,4,5,6,8].map(function(v) { return "<option " + (v === tab.columns ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Sec</label><select id=\"seconds\">" + [5,10,15,30,60].map(function(v) { return "<option " + (v === tab.seconds ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Scroll</label><select id=\"scroll\"><option value=\"center\" " + (tab.scroll === "center" ? "selected" : "") + ">Center</option><option value=\"edge\" " + (tab.scroll === "edge" ? "selected" : "") + ">Edge</option><option value=\"off\" " + (tab.scroll === "off" ? "selected" : "") + ">OFF</option></select></div></header><div id=\"gridScroll\" class=\"grid-scroll\"><div id=\"frameGrid\" class=\"frame-grid\"></div></div></aside></div><footer class=\"player-status\">Пробел — пуск/пауза · Стрелки — перемещение маркера · Клик/перетаскивание — точный переход</footer></section>";
+    view.innerHTML = "<section class=\"player-view\"><div class=\"player-layout\"" + gs + "\"><div class=\"player-main\"><div class=\"video-bar\"><button id=\"back\" class=\"back\">◀ VIDEO LIST</button><span id=\"reveal\" class=\"video-path\" title=\"Открыть в Проводнике\">" + escapeHtml(tab.video.path) + "</span><button id=\"videoScreenshot\" class=\"video-action\" title=\"Сохранить скрин текущего кадра\" aria-label=\"Сохранить скрин текущего кадра\">SHOT</button><button id=\"copyVideoName\" class=\"video-action\" title=\"Скопировать название файла без расширения\" aria-label=\"Скопировать название файла без расширения\">COPY</button><button id=\"openOkoshko\" class=\"video-action\" title=\"Открыть в okoshko\" aria-label=\"Открыть в okoshko\"><svg viewBox=\"0 0 16 16\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><rect x=\"2\" y=\"3\" width=\"12\" height=\"10\" rx=\"1.5\"/><path d=\"M2 6h12\"/></svg></button><button id=\"openExternal\" class=\"open-external\" title=\"Открыть в системном плеере\" aria-label=\"Открыть в системном плеере\">▶</button></div><div class=\"video-stage\"><video id=\"player\" controls playsinline src=\"" + (state.cutJob && state.cutJob.filePath === tab.video.path ? "" : tab.video.url) + "\"></video><nav class=\"video-switcher\" aria-label=\"Управление воспроизведением и переключение видео\"><button id=\"previousVideo\" type=\"button\" title=\"Предыдущее видео\" aria-label=\"Предыдущее видео\" " + (prevDisabled ? "disabled" : "") + ">‹ Prev</button><button id=\"togglePlayback\" class=\"toggle-playback\" type=\"button\" title=\"Воспроизвести (Space)\" aria-label=\"Воспроизвести\" aria-pressed=\"false\"><span aria-hidden=\"true\">▶</span></button><button id=\"nextVideo\" type=\"button\" title=\"Следующее видео\" aria-label=\"Следующее видео\" " + (nextDisabled ? "disabled" : "") + ">Next ›</button></nav></div></div><aside id=\"gridPanel\" class=\"grid-panel" + (tab.collapsed ? " collapsed" : "") + "\"><header class=\"grid-head\"><button id=\"collapse\" class=\"collapse\" title=\"Свернуть панель\">" + (tab.collapsed ? "◀" : "▶") + "</button><div class=\"grid-control\"><label>Col</label><select id=\"columns\">" + [3,4,5,6,8].map(function(v) { return "<option " + (v === tab.columns ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Sec</label><select id=\"seconds\">" + [5,10,15,30,60].map(function(v) { return "<option " + (v === tab.seconds ? "selected" : "") + ">" + v + "</option>"; }).join("") + "</select></div><div class=\"grid-control\"><label>Scroll</label><select id=\"scroll\"><option value=\"center\" " + (tab.scroll === "center" ? "selected" : "") + ">Center</option><option value=\"edge\" " + (tab.scroll === "edge" ? "selected" : "") + ">Edge</option><option value=\"off\" " + (tab.scroll === "off" ? "selected" : "") + ">OFF</option></select></div></header><div id=\"gridScroll\" class=\"grid-scroll\"><div id=\"frameGrid\" class=\"frame-grid\"></div></div></aside></div><footer class=\"player-status\">Пробел — пуск/пауза · Стрелки — перемещение маркера · Клик/перетаскивание — точный переход · I/O — границы вырезки · X — вырезать · Ctrl+Z — отменить вырезку</footer></section>";
     $("#gridPanel").outerHTML = sidePanelMarkup(tab);
     $(".video-switcher").insertAdjacentHTML("afterend", '<div class="video-note-box"><label for="videoNote" id="videoNoteTime">Заметки</label><textarea id="videoNote" aria-label="Заметка к текущему моменту видео" title="На паузе можно записать заметку" readonly></textarea></div>');
     var favoriteButton = document.createElement("button");
@@ -1258,6 +1291,13 @@
     moveButton.setAttribute("aria-label", moveButton.title);
     moveButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6l2 2h8v12H4V4Zm8 7h6m0 0-3-3m3 3-3 3"/></svg>';
     $("#playerDelete").before(moveButton);
+    var cutButton = document.createElement("button");
+    cutButton.id = "playerCut";
+    cutButton.className = "player-cut" + (tab.cut && tab.cut.open ? " is-active" : "");
+    cutButton.title = "Вырезать фрагменты (I — начало, O — конец, X — вырезать)";
+    cutButton.setAttribute("aria-label", cutButton.title);
+    cutButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/></svg>';
+    $("#playerDelete").before(cutButton);
     var speedButton = document.createElement("button");
     var speedJob = state.speedUp;
     var speedingUp = speedJob && speedJob.filePath === tab.video.path;
@@ -1305,6 +1345,7 @@
     $("#reveal").addEventListener("click", function() { window.folderVideo.showInFolder(tab.video.path); });
     $("#playerFavorite").addEventListener("click", function() { toggleFavorite(tab.video); renderPlayer(tab); });
     $("#playerMove").addEventListener("click", function() { moveFile(tab.video.path); });
+    $("#playerCut").addEventListener("click", function() { toggleCutBar(tab, player); $("#playerCut").classList.toggle("is-active", Boolean(tab.cut && tab.cut.open)); });
     $("#playerSpeed").addEventListener("click", function() { startSpeedUp(tab, player); });
     $("#playerTranscript").addEventListener("click", function() { tab.panelMode = "transcript"; setPlayerPanelMode(tab, player); if (!tab.transcriptSegments || !tab.transcriptSegments.length) startPlayerTranscript(tab); });
     $("#playerDelete").addEventListener("click", function() { deleteFile(tab.video.path); });
@@ -1410,9 +1451,267 @@
     player.addEventListener("timeupdate", function() { tab.currentTime = player.currentTime; updateActiveFrame(player.currentTime, tab, !tab.isDragging); updateActiveTranscript(player.currentTime, tab, true); refreshVideoNote(tab, player, true); });
     player.addEventListener("seeked", function() { tab.currentTime = player.currentTime; updateActiveFrame(player.currentTime, tab, !tab.isDragging); updateActiveTranscript(player.currentTime, tab, true); refreshVideoNote(tab, player, false); });
     document.onkeydown = function(event) { keyboardPlayer(event, tab, player); };
+    player.addEventListener("loadedmetadata", function() { renderCutBar(tab, player); });
+    ["timeupdate", "seeked"].forEach(function(name) { player.addEventListener(name, function() { updateCutPlayhead(tab, player); }); });
+    renderCutBar(tab, player);
+    if (state.cutJob && state.cutJob.filePath === tab.video.path) showCutOverlay(tab);
+  }
+  // --- Вырезка фрагментов ---
+  var CUT_FRAME_STEP = 1 / 30;
+  var CUT_MIN_HANDLE_GAP = 0.1;
+  function cutModel(tab) {
+    if (!tab.cut) tab.cut = { open: false, ranges: [], pendingStart: null, precise: localStorage.getItem("folder-video-cut-precise") === "true", plan: null, planError: "", planToken: 0, planTimer: null };
+    return tab.cut;
+  }
+  function cutPercent(seconds, duration) { return Math.max(0, Math.min(100, seconds / duration * 100)); }
+  function cutClock(seconds) { return window.CutCore.formatClock(seconds); }
+  function cutInfoText(tab) {
+    var cut = cutModel(tab);
+    if (cut.planError) return cut.planError;
+    if (cut.pendingStart !== null && !cut.ranges.length) return "Начало " + cutClock(cut.pendingStart) + ". Найдите конец и нажмите O.";
+    if (!cut.ranges.length) return "I — начало, O — конец, X — вырезать. Ctrl+Z — отменить последнюю вырезку.";
+    if (!cut.plan) return "Проверяю границы…";
+    var plan = cut.plan;
+    var removed = window.CutCore.removedSeconds(plan.ranges);
+    var text = "Будет удалено " + cutClock(removed) + " (" + plan.ranges.map(function(range) { return cutClock(range.start) + " → " + cutClock(range.end); }).slice(0, 3).join("; ") + (plan.ranges.length > 3 ? "…" : "") + "), останется " + cutClock(plan.remainder) + ".";
+    if (plan.skipped.length) text += " Слишком короткие для копирования: " + plan.skipped.length + " — включите «Точно».";
+    return text;
+  }
+  function scheduleCutPlan(tab) {
+    var cut = cutModel(tab);
+    clearTimeout(cut.planTimer);
+    cut.plan = null; cut.planError = "";
+    var token = ++cut.planToken;
+    updateCutInfo(tab);
+    if (!cut.ranges.length) return;
+    cut.planTimer = setTimeout(async function() {
+      var result = await window.folderVideo.planCut(tab.video.path, cut.ranges, cut.precise);
+      if (token !== cut.planToken) return;
+      if (result && result.plan) cut.plan = result.plan; else cut.planError = (result && result.error) || "Не удалось проверить границы.";
+      updateCutInfo(tab);
+    }, 250);
+  }
+  function updateCutInfo(tab) {
+    var info = $("#cutInfo");
+    if (info) info.textContent = cutInfoText(tab);
+    var run = $("#cutRun");
+    if (run) { var cut = cutModel(tab); run.disabled = !cut.ranges.length || Boolean(state.cutJob); run.textContent = "Вырезать" + (cut.ranges.length ? " (" + cut.ranges.length + ")" : "") + " · X"; }
+  }
+  function updateCutPlayhead(tab, player) {
+    var head = $("#cutPlayhead");
+    if (head && Number.isFinite(player.duration) && player.duration > 0) head.style.left = cutPercent(player.currentTime || 0, player.duration) + "%";
+  }
+  function setCutRangeStyle(element, range, duration) {
+    var left = cutPercent(range.start, duration);
+    element.style.left = left + "%"; element.style.width = (cutPercent(range.end, duration) - left) + "%";
+  }
+  function renderCutBar(tab, player) {
+    var stage = $(".video-stage");
+    var existing = $("#cutBar");
+    var cut = tab.cut;
+    if (!stage) return;
+    if (!cut || !cut.open || !Number.isFinite(player.duration) || player.duration <= 0) {
+      if (existing) existing.remove();
+      stage.classList.remove("has-cut-bar");
+      return;
+    }
+    var duration = player.duration;
+    var bar = existing;
+    if (!bar) { bar = document.createElement("div"); bar.id = "cutBar"; bar.className = "cut-bar"; $(".video-switcher").before(bar); }
+    stage.classList.add("has-cut-bar");
+    var ranges = cut.ranges.map(function(range, index) {
+      var left = cutPercent(range.start, duration);
+      return '<div class="cut-range" style="left:' + left + '%;width:' + (cutPercent(range.end, duration) - left) + '%" data-index="' + index + '"><span class="cut-handle is-start" data-index="' + index + '" data-edge="start" tabindex="0" role="slider" title="Начало фрагмента: ' + cutClock(range.start) + '" aria-label="Начало фрагмента ' + (index + 1) + '" aria-valuemin="0" aria-valuemax="' + Math.round(duration) + '" aria-valuenow="' + Math.round(range.start) + '"></span><span class="cut-handle is-end" data-index="' + index + '" data-edge="end" tabindex="0" role="slider" title="Конец фрагмента: ' + cutClock(range.end) + '" aria-label="Конец фрагмента ' + (index + 1) + '" aria-valuemin="0" aria-valuemax="' + Math.round(duration) + '" aria-valuenow="' + Math.round(range.end) + '"></span></div>';
+    }).join("");
+    var pending = cut.pendingStart !== null ? '<div class="cut-pending" style="left:' + cutPercent(cut.pendingStart, duration) + '%" title="Начало: ' + cutClock(cut.pendingStart) + '"></div>' : "";
+    var chips = cut.ranges.map(function(range, index) {
+      return '<span class="cut-chip"><button type="button" class="cut-chip-seek" data-seek="' + index + '" title="Перейти к началу фрагмента" aria-label="Перейти к началу фрагмента ' + (index + 1) + '">' + cutClock(range.start) + ' → ' + cutClock(range.end) + '</button><button type="button" class="cut-chip-remove" data-remove="' + index + '" title="Убрать фрагмент" aria-label="Убрать фрагмент ' + (index + 1) + '">✕</button></span>';
+    }).join("");
+    bar.innerHTML = '<div id="cutTrack" class="cut-track" role="group" aria-label="Полоса фрагментов для вырезки">' + ranges + pending + '<div id="cutPlayhead" class="cut-playhead"></div></div>' +
+      '<div class="cut-controls"><button type="button" id="cutMarkStart" title="Начало фрагмента (I)" aria-label="Начало фрагмента">[ Начало</button><button type="button" id="cutMarkEnd" title="Конец фрагмента (O)" aria-label="Конец фрагмента">Конец ]</button><span class="cut-chips">' + chips + '</span>' +
+      '<button type="button" id="cutPreview" title="Проиграть место склейки" aria-label="Проиграть место склейки"' + (cut.ranges.length ? "" : " disabled") + '>Просмотр</button>' +
+      '<label class="cut-precise" title="Перекодировать для точности до кадра: медленнее, но границы ровно там, где отмечены"><input type="checkbox" id="cutPrecise"' + (cut.precise ? " checked" : "") + ' aria-label="Точно (перекодировать)"> Точно</label>' +
+      '<button type="button" id="cutRun" class="cut-run" title="Вырезать отмеченные фрагменты (X)" aria-label="Вырезать отмеченные фрагменты"></button><button type="button" id="cutClose" title="Закрыть панель вырезки" aria-label="Закрыть панель вырезки">✕</button></div>' +
+      '<div id="cutInfo" class="cut-info" role="status"></div>';
+    updateCutInfo(tab); updateCutPlayhead(tab, player);
+    $("#cutMarkStart").addEventListener("click", function() { cutMarkStart(tab, player); });
+    $("#cutMarkEnd").addEventListener("click", function() { cutMarkEnd(tab, player); });
+    $("#cutPreview").addEventListener("click", function() { previewCut(tab, player); });
+    $("#cutRun").addEventListener("click", function() { runCut(tab, player); });
+    $("#cutClose").addEventListener("click", function() { cut.open = false; renderCutBar(tab, player); });
+    $("#cutPrecise").addEventListener("change", function(event) { cut.precise = event.target.checked; try { localStorage.setItem("folder-video-cut-precise", String(cut.precise)); } catch (error) {} event.target.blur(); scheduleCutPlan(tab); });
+    bar.querySelectorAll("[data-seek]").forEach(function(button) { button.addEventListener("click", function() { player.currentTime = cut.ranges[Number(button.dataset.seek)].start; }); });
+    bar.querySelectorAll("[data-remove]").forEach(function(button) { button.addEventListener("click", function() { cut.ranges.splice(Number(button.dataset.remove), 1); renderCutBar(tab, player); scheduleCutPlan(tab); }); });
+    bar.querySelectorAll(".cut-handle").forEach(function(handle) {
+      handle.addEventListener("keydown", function(event) {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault(); event.stopPropagation();
+        var range = cut.ranges[Number(handle.dataset.index)]; var edge = handle.dataset.edge;
+        var next = range[edge] + (event.key === "ArrowLeft" ? -1 : 1) * (event.shiftKey ? 1 : CUT_FRAME_STEP);
+        range[edge] = edge === "start" ? Math.max(0, Math.min(next, range.end - CUT_MIN_HANDLE_GAP)) : Math.min(duration, Math.max(next, range.start + CUT_MIN_HANDLE_GAP));
+        player.currentTime = range[edge];
+        renderCutBar(tab, player); scheduleCutPlan(tab);
+        var again = bar.querySelector('.cut-handle[data-index="' + handle.dataset.index + '"][data-edge="' + edge + '"]'); if (again) again.focus();
+      });
+    });
+    var track = $("#cutTrack"); var drag = null;
+    function timeAt(event) { var rect = track.getBoundingClientRect(); return Math.max(0, Math.min(duration, (event.clientX - rect.left) / rect.width * duration)); }
+    track.addEventListener("pointerdown", function(event) {
+      track.setPointerCapture(event.pointerId);
+      var handle = event.target instanceof Element ? event.target.closest(".cut-handle") : null;
+      drag = handle ? { index: Number(handle.dataset.index), edge: handle.dataset.edge } : { scrub: true };
+      if (drag.scrub) player.currentTime = timeAt(event);
+    });
+    track.addEventListener("pointermove", function(event) {
+      if (!drag) return;
+      var time = timeAt(event);
+      if (drag.scrub) { player.currentTime = time; return; }
+      var range = cut.ranges[drag.index];
+      range[drag.edge] = drag.edge === "start" ? Math.min(time, range.end - CUT_MIN_HANDLE_GAP) : Math.max(time, range.start + CUT_MIN_HANDLE_GAP);
+      setCutRangeStyle(track.querySelector('.cut-range[data-index="' + drag.index + '"]'), range, duration);
+      player.currentTime = range[drag.edge];
+    });
+    function finishDrag() {
+      if (!drag) return;
+      var wasHandle = !drag.scrub; drag = null;
+      if (wasHandle) { cut.ranges = window.CutCore.normalizeRanges(cut.ranges, duration); renderCutBar(tab, player); scheduleCutPlan(tab); }
+    }
+    track.addEventListener("pointerup", finishDrag); track.addEventListener("pointercancel", finishDrag);
+  }
+  function cutMarkStart(tab, player) {
+    if (!Number.isFinite(player.duration) || player.duration <= 0) { notice("Дождитесь загрузки длительности видео."); return; }
+    var cut = cutModel(tab); cut.open = true; cut.pendingStart = player.currentTime;
+    renderCutBar(tab, player); updateCutInfo(tab);
+  }
+  function cutMarkEnd(tab, player) {
+    if (!Number.isFinite(player.duration) || player.duration <= 0) { notice("Дождитесь загрузки длительности видео."); return; }
+    var cut = cutModel(tab);
+    if (cut.pendingStart === null) { cut.open = true; renderCutBar(tab, player); notice("Сначала отметьте начало клавишей I."); return; }
+    var start = Math.min(cut.pendingStart, player.currentTime); var end = Math.max(cut.pendingStart, player.currentTime);
+    if (end - start < window.CutCore.MIN_RANGE_SECONDS) { notice("Конец должен быть позже начала."); return; }
+    cut.ranges = window.CutCore.normalizeRanges(cut.ranges.concat([{ start: start, end: end }]), player.duration);
+    cut.pendingStart = null; cut.open = true;
+    renderCutBar(tab, player); scheduleCutPlan(tab);
+  }
+  function toggleCutBar(tab, player) {
+    var cut = cutModel(tab); cut.open = !cut.open;
+    renderCutBar(tab, player);
+  }
+  function previewCut(tab, player) {
+    var cut = cutModel(tab);
+    if (!cut.ranges.length) return;
+    var range = cut.plan && cut.plan.ranges.length ? cut.plan.ranges[0] : cut.ranges[0];
+    var context = 3;
+    var jumped = false;
+    var token = {};
+    state.cutPreview = token;
+    player.currentTime = Math.max(0, range.start - context);
+    player.play().catch(function() {});
+    (function watch() {
+      if (state.cutPreview !== token || !document.body.contains(player)) return;
+      var time = player.currentTime;
+      if (!jumped && time >= range.start && time < range.end) { jumped = true; player.currentTime = range.end; }
+      else if (jumped && time >= range.end + context) { player.pause(); state.cutPreview = null; return; }
+      if (player.paused && !jumped && time > range.end) { state.cutPreview = null; return; }
+      requestAnimationFrame(watch);
+    })();
+  }
+  function showCutOverlay(tab) {
+    var stage = $(".video-stage");
+    var job = state.cutJob;
+    if (!stage || !job || job.filePath !== tab.video.path) return;
+    var overlay = document.createElement("div");
+    overlay.id = "cutOverlay"; overlay.className = "cut-overlay"; overlay.setAttribute("role", "status");
+    overlay.innerHTML = '<div class="cut-overlay-box"><div id="cutOverlayText" class="cut-overlay-text"></div><div class="cut-overlay-track"><div id="cutOverlayBar" class="cut-overlay-bar"></div></div><button type="button" id="cutOverlayCancel" title="Отменить вырезку" aria-label="Отменить вырезку">Отмена</button></div>';
+    stage.appendChild(overlay);
+    $("#cutOverlayCancel").addEventListener("click", function() { window.folderVideo.cancelCut(job.operationId); });
+    updateCutOverlay();
+  }
+  function updateCutOverlay() {
+    var job = state.cutJob; var text = $("#cutOverlayText"); var bar = $("#cutOverlayBar");
+    if (!job || !text || !bar) return;
+    text.textContent = (job.precise ? "Вырезаю с перекодированием… " : "Вырезаю… ") + Math.round(job.progress) + "%";
+    bar.style.width = job.progress + "%";
+  }
+  window.folderVideo.onCutProgress(function(progress) {
+    if (!state.cutJob || progress.operationId !== state.cutJob.operationId) return;
+    state.cutJob.progress = progress.percent;
+    updateCutOverlay();
+  });
+  function replaceVideoItem(video) {
+    var index = state.files.findIndex(function(file) { return file.path === video.path; });
+    if (index === -1) state.files.push(video); else state.files[index] = video;
+  }
+  async function runCut(tab, player) {
+    var cut = cutModel(tab);
+    if (!cut.ranges.length) { notice("Отметьте фрагмент: I — начало, O — конец."); return; }
+    if (state.cutJob) { notice("Вырезка уже выполняется."); return; }
+    var problem = window.CutCore.validateCut(cut.ranges, player.duration);
+    if (problem) { notice(problem); return; }
+    await flushPlayerNotes(tab);
+    var filePath = tab.video.path;
+    var ranges = cut.ranges.map(function(range) { return { start: range.start, end: range.end }; });
+    var job = { operationId: "cut-" + Date.now() + "-" + Math.random().toString(16).slice(2), filePath: filePath, progress: 0, precise: cut.precise };
+    state.cutJob = job;
+    state.cutPreview = null;
+    releasePlayerResources(tab.video.url);
+    updateCutInfo(tab);
+    showCutOverlay(tab);
+    var result = await window.folderVideo.startCut(filePath, job.operationId, ranges, cut.precise);
+    state.cutJob = null;
+    var tabs = state.tabs.filter(function(item) { return item.type === "player" && item.video.path === filePath; });
+    if (!result || result.canceled) { notice("Вырезка отменена", true); if (active() === tab) renderPlayer(tab); return; }
+    if (result.error) {
+      notice("Не удалось вырезать: " + (result.code === "ENOENT" ? "FFmpeg не найден в PATH." : result.error)); if (active() === tab) renderPlayer(tab); return;
+    }
+    var video = await window.folderVideo.readVideo(result.outputPath);
+    if (!video) { notice("Вырезка сделана, но не удалось открыть файл."); if (active() === tab) renderPlayer(tab); return; }
+    var removed = window.CutCore.removedSeconds(result.ranges);
+    if (!result.replaced) {
+      replaceVideoItem(video);
+      cut.ranges = []; cut.pendingStart = null; cut.plan = null;
+      notice("Сохранено: " + video.name + " (удалено " + cutClock(removed) + ")", true);
+      if (active() === tab) renderPlayer(tab);
+      return;
+    }
+    replaceVideoItem(video);
+    var seam = result.ranges[0].start;
+    tabs.forEach(function(item) { setPlayerVideo(item, video); item.currentTime = item === tab ? seam : 0; });
+    state.cutUndo.push({ undoId: result.undoId, filePath: filePath });
+    notice("Вырезано " + cutClock(removed) + ". Отменить — клик или Ctrl+Z", true, function() { undoLastCut(); }, "Отменить вырезку");
+    render();
+  }
+  async function undoLastCut() {
+    var entry = state.cutUndo.pop();
+    if (!entry) { notice("Нет вырезок для отмены.", true); return; }
+    if (!await undoCutEntry(entry)) state.cutUndo.push(entry);
+  }
+  async function undoCutEntry(entry) {
+    if (state.cutJob) { notice("Дождитесь окончания вырезки."); return false; }
+    var tabs = state.tabs.filter(function(item) { return item.type === "player" && item.video.path === entry.filePath; });
+    await Promise.all(tabs.map(flushPlayerNotes));
+    tabs.forEach(function(item) { releasePlayerResources(item.video.url); });
+    var result = await window.folderVideo.undoCut(entry.undoId);
+    if (!result || result.error) { notice("Не удалось отменить: " + ((result && result.error) || "неизвестная ошибка")); render(); return false; }
+    var video = await window.folderVideo.readVideo(entry.filePath);
+    if (video) { replaceVideoItem(video); tabs.forEach(function(item) { setPlayerVideo(item, video); }); }
+    notice("Вырезка отменена, оригинал восстановлен", true);
+    render();
+    return true;
   }
   function keyboardPlayer(event, tab, player) {
     if (active().id !== tab.id || ["SELECT", "INPUT", "TEXTAREA"].indexOf(document.activeElement.tagName) !== -1) return;
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.code === "KeyZ") { event.preventDefault(); undoLastCut(); return; }
+    if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+      if (!event.repeat && event.code === "KeyI") { event.preventDefault(); cutMarkStart(tab, player); return; }
+      if (!event.repeat && event.code === "KeyO") { event.preventDefault(); cutMarkEnd(tab, player); return; }
+      if (!event.repeat && event.code === "KeyX") { event.preventDefault(); runCut(tab, player); return; }
+      if (event.code === "Comma" || event.code === "Period") {
+        event.preventDefault(); player.pause();
+        player.currentTime = Math.max(0, Math.min(player.duration || 0, player.currentTime + (event.code === "Comma" ? -CUT_FRAME_STEP : CUT_FRAME_STEP)));
+        return;
+      }
+    }
     var step = tab.seconds; var target = null;
     if (event.key === " ") {
       if (event.repeat) { event.preventDefault(); return; }
