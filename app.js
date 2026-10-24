@@ -5,11 +5,12 @@
   const notesCore = window.NotesCore;
   const thumbnailQueue = new ThumbnailQueue(2);
   const supported = "MP4, WebM, MOV, AVI, MKV, M4V, OGV";
-  const DEFAULT_SETTINGS = { version: 1, theme: "dark", storage: { metadataDirectory: "", gitRepositoryUrl: "", obsidianInbox: "" }, viewer: { columns: 3, seconds: 10, scroll: "center", panelWidth: 410 }, interface: { metadataCollapsed: false, gridCollapsed: false }, cut: { replaceOriginal: true }, transcription: { modelPath: "" }, ai: { model: "deepseek-flash", apiKey: "", keyConfigured: false, clearKey: false } };
+  const DEFAULT_SETTINGS = { version: 1, theme: "dark", storage: { metadataDirectory: "", gitRepositoryUrl: "", obsidianInbox: "", transcriptDirectory: "" }, viewer: { columns: 3, seconds: 10, scroll: "center", panelWidth: 410 }, interface: { metadataCollapsed: false, gridCollapsed: false }, cut: { replaceOriginal: true }, transcription: { modelPath: "" }, ai: { model: "deepseek-flash", apiKey: "", keyConfigured: false, clearKey: false } };
   const SETTINGS_FIELDS = [
     { group: "Хранилище", key: "storage.metadataDirectory", label: "Каталог метаданных", type: "text", hint: "JSON-файлы и template.html" },
     { group: "Хранилище", key: "storage.gitRepositoryUrl", label: "Git-репозиторий", type: "text", hint: "URL удалённого репозитория" },
     { group: "Хранилище", key: "storage.obsidianInbox", label: "Папка статей Obsidian", type: "text", hint: "Сюда кнопка в шапке панели сохраняет сводную статью по видео" },
+    { group: "Транскрибация", key: "storage.transcriptDirectory", label: "Папка транскрипций", type: "folder", hint: "Сюда сохраняются субтитры (.srt), сводки и заметки. Пустое значение — папка по умолчанию. Уже созданные файлы в новую папку не переносятся." },
     { group: "Транскрибация", key: "transcription.modelPath", label: "Модель Parakeet TDT", type: "text", hint: "Путь к GGUF-файлу; пустое значение — поиск в кэше HuggingFace" },
     { group: "Суммаризация", key: "ai.apiKey", label: "Ключ DeepSeek", type: "password", hint: "Текст транскрипции отправляется в DeepSeek. Ключ шифруется; пустое поле оставляет прежний." },
     { group: "Суммаризация", key: "ai.model", label: "Название модели", type: "text", hint: "По умолчанию deepseek-flash" },
@@ -24,7 +25,7 @@
   const state = {
     folderPath: "", files: [], skipped: 0, recursive: false, hideEmptyFiles: false, recentDaysEnabled: localStorage.getItem("folder-video-recent-days-enabled") === "true", recentDays: normalizeRecentDays(localStorage.getItem("folder-video-recent-days")), filterText: "", sort: "date", asc: false, page: 1, pageSize: 10,
     tabs: [{ id: "folder", type: "folder", label: "Видео" }], activeTab: "folder", cutJob: null, cutUndo: [], cutPreview: null,
-    stripCache: new Map(), stripPending: new Map(), frameCache: new Map(), favoriteThumbnailCache: new Map(), durationCache: new Map(), captureVideos: new Map(), task: 0, thumbnailGeneration: 0, thumbnailPriority: 0,
+    stripCache: new Map(), stripPending: new Map(), frameCache: new Map(), favoriteThumbnailCache: new Map(), durationCache: new Map(), youtubeSourceCache: new Map(), youtubeBusy: new Set(), captureVideos: new Map(), task: 0, thumbnailGeneration: 0, thumbnailPriority: 0,
     recentFolders: JSON.parse(localStorage.getItem("folder-video-recent") || "[]"),
     pinnedFolders: JSON.parse(localStorage.getItem("folder-video-pinned") || "[]"),
     favorites: JSON.parse(localStorage.getItem("folder-video-favorites") || "[]"), favoritesOpen: false, favoritesOnly: false, favoritesFolderOnly: false,
@@ -434,6 +435,82 @@
     if (!active()) state.activeTab = 'folder';
     render();
   }
+  var YOUTUBE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="5.5" width="19" height="13" rx="4"/><path d="m10 9.5 5 2.5-5 2.5Z"/></svg>';
+  function youtubeSourceKey(video) { return video.path + "|" + (video.size || 0) + "|" + (video.lastModified || 0); }
+  function youtubeWritable(filePath) { return /\.(mp4|m4v|mov)$/i.test(filePath); }
+  function currentYoutubeInfo(video) {
+    if (state.youtubeBusy.has(video.path)) return { mode: "busy" };
+    if (!youtubeWritable(video.path)) return { mode: "unsupported" };
+    return state.youtubeSourceCache.get(youtubeSourceKey(video)) || { mode: "loading" };
+  }
+  function applyYoutubeButton(video) {
+    var button = $("#playerYoutube"), tab = active();
+    if (!button || !tab || tab.type !== "player" || tab.video.path !== video.path) return;
+    var info = currentYoutubeInfo(video), title;
+    if (info.mode === "linked") title = "Открыть исходник на YouTube";
+    else if (info.mode === "none") title = "Найти исходник на YouTube и записать ссылку в свойства файла";
+    else if (info.mode === "busy") title = "Идёт поиск исходника на YouTube…";
+    else if (info.mode === "unsupported") title = "Формат файла не поддерживает запись ссылки в свойства (нужен mp4, m4v или mov)";
+    else if (info.mode === "error") title = "Не удалось прочитать свойства файла: " + info.message + ". Нажмите, чтобы искать на YouTube";
+    else title = "Читаю свойства файла…";
+    button.title = title; button.setAttribute("aria-label", title);
+    button.classList.toggle("is-linked", info.mode === "linked");
+    button.classList.toggle("is-busy", info.mode === "busy");
+    button.disabled = info.mode === "busy" || info.mode === "unsupported" || info.mode === "loading";
+  }
+  async function loadYoutubeSource(video) {
+    if (youtubeWritable(video.path) && !state.youtubeSourceCache.has(youtubeSourceKey(video))) {
+      var result = await window.folderVideo.readYoutubeSource(video.path);
+      state.youtubeSourceCache.set(youtubeSourceKey(video), result && !result.error
+        ? (result.url ? { mode: "linked", url: result.url } : { mode: "none" })
+        : { mode: "error", message: result && result.error ? result.error : "нет ответа" });
+    }
+    applyYoutubeButton(video);
+  }
+  async function saveYoutubeSource(video, url) {
+    state.youtubeBusy.add(video.path); applyYoutubeButton(video);
+    var result = await window.folderVideo.writeYoutubeSource(video.path, url);
+    state.youtubeBusy.delete(video.path);
+    if (!result || result.error) { notice("Не удалось записать ссылку: " + (result && result.error ? result.error : "нет ответа")); applyYoutubeButton(video); return; }
+    state.youtubeSourceCache.set(youtubeSourceKey(video), { mode: "linked", url: result.url });
+    notice(result.warning ? "Ссылка записана. " + result.warning : "Ссылка на YouTube записана в свойства файла", !result.warning);
+    applyYoutubeButton(video);
+  }
+  function closeYoutubePicker() { var overlay = $("#youtubePickerOverlay"); if (overlay) overlay.remove(); document.removeEventListener("keydown", youtubePickerKeydown); }
+  function youtubePickerKeydown(event) { if (event.key === "Escape") closeYoutubePicker(); }
+  function showYoutubePicker(video, search, fileDuration) {
+    closeYoutubePicker();
+    var overlay = document.createElement("div"); overlay.id = "youtubePickerOverlay"; overlay.className = "favorites-overlay";
+    var items = search.candidates.map(function(candidate, index) {
+      var meta = [candidate.channel, candidate.duration === null ? "длительность неизвестна" : formatTime(candidate.duration)];
+      if (candidate.duration !== null && Number.isFinite(fileDuration) && Math.abs(candidate.duration - fileDuration) > 2) meta.push("файл: " + formatTime(fileDuration));
+      return "<li class=\"favorite-item youtube-candidate\"><div class=\"youtube-candidate-text\"><strong>" + escapeHtml(candidate.title) + "</strong><span>" + escapeHtml(meta.filter(Boolean).join(" · ")) + "</span></div>" +
+        "<button type=\"button\" class=\"youtube-candidate-button\" data-open=\"" + index + "\" title=\"Открыть ролик в браузере для проверки\" aria-label=\"Открыть ролик в браузере для проверки\">Открыть</button>" +
+        "<button type=\"button\" class=\"youtube-candidate-button is-primary\" data-save=\"" + index + "\" title=\"Записать эту ссылку в свойства файла\" aria-label=\"Записать эту ссылку в свойства файла\">Записать</button></li>";
+    }).join("");
+    overlay.innerHTML = "<section class=\"favorites-panel youtube-picker\" role=\"dialog\" aria-modal=\"true\" aria-label=\"Выбор исходника на YouTube\"><header><strong>Выберите исходник</strong><span>" + search.candidates.length + "</span><button id=\"closeYoutubePicker\" title=\"Закрыть\" aria-label=\"Закрыть\">×</button></header><p class=\"youtube-picker-note\">Точного совпадения по длительности нет. Запрос: «" + escapeHtml(search.query) + "»</p><ul>" + items + "</ul></section>";
+    document.body.appendChild(overlay);
+    document.addEventListener("keydown", youtubePickerKeydown);
+    overlay.addEventListener("click", function(event) { if (event.target === overlay) closeYoutubePicker(); });
+    $("#closeYoutubePicker").addEventListener("click", closeYoutubePicker);
+    overlay.querySelectorAll("[data-open]").forEach(function(button) { button.addEventListener("click", function() { window.folderVideo.openYoutubeSource(search.candidates[Number(button.dataset.open)].url); }); });
+    overlay.querySelectorAll("[data-save]").forEach(function(button) { button.addEventListener("click", function() { var candidate = search.candidates[Number(button.dataset.save)]; closeYoutubePicker(); saveYoutubeSource(video, candidate.url); }); });
+  }
+  async function findYoutubeSource(video, player) {
+    if (!window.confirm("Искать исходник на YouTube по названию файла?\n\n" + video.name + "\n\nНазвание уйдёт в сеть (YouTube). Найденная ссылка будет записана в свойство «URL-адрес автора»; даты создания и изменения файла не изменятся.")) return;
+    var fileDuration = player && Number.isFinite(player.duration) ? player.duration : NaN;
+    state.youtubeBusy.add(video.path); applyYoutubeButton(video);
+    var search = await window.folderVideo.searchYoutubeSource(video.path, fileDuration);
+    state.youtubeBusy.delete(video.path); applyYoutubeButton(video);
+    if (!search || search.error) { notice("Поиск на YouTube не удался: " + (search && search.error ? search.error : "нет ответа")); return; }
+    if (!search.candidates.length) { notice("На YouTube ничего не найдено по запросу «" + search.query + "»"); return; }
+    if (search.auto) saveYoutubeSource(video, search.auto.url);
+    else showYoutubePicker(video, search, fileDuration);
+  }
+  function openYoutubeSource(video) {
+    var info = state.youtubeSourceCache.get(youtubeSourceKey(video));
+    if (info && info.mode === "linked") window.folderVideo.openYoutubeSource(info.url);
+  }
   async function deleteFile(filePath) {
     var playerTab = active();
     var replacement = playerTab && playerTab.type === 'player' && playerTab.video.path === filePath
@@ -493,6 +570,7 @@
   }
   function settingsControlMarkup(field, value) {
     if (field.type === "password") return "<input data-setting=\"" + field.key + "\" type=\"password\" autocomplete=\"off\" placeholder=\"" + (state.settings.ai.keyConfigured ? "Ключ сохранён" : "Введите API-ключ") + "\" value=\"\" />";
+    if (field.type === "folder") return "<span class=\"settings-folder\"><input data-setting=\"" + field.key + "\" type=\"text\" value=\"" + escapeHtml(value) + "\" /><button type=\"button\" class=\"settings-reset\" data-browse=\"" + field.key + "\" title=\"Выбрать папку\" aria-label=\"Выбрать папку: " + escapeHtml(field.label) + "\">Обзор…</button></span>";
     if (field.type === "text") return "<input data-setting=\"" + field.key + "\" type=\"text\" value=\"" + escapeHtml(value) + "\" />";
     if (field.type === "checkbox") return "<label class=\"settings-switch\"><input data-setting=\"" + field.key + "\" type=\"checkbox\"" + (value ? " checked" : "") + "/><span></span></label>";
     var options = field.options.map(function(option) { var item = typeof option === "object" ? option : { value: option, label: String(option) + (field.suffix ? " " + field.suffix : "") }; return "<option value=\"" + escapeHtml(item.value) + "\"" + (String(item.value) === String(value) ? " selected" : "") + ">" + escapeHtml(item.label) + "</option>"; }).join("");
@@ -503,6 +581,7 @@
     var markup = Object.keys(groups).map(function(group) { return "<section class=\"settings-group\"><h2>" + escapeHtml(group) + "</h2>" + groups[group].map(function(field) { return "<label class=\"settings-row\"><span><strong>" + escapeHtml(field.label) + "</strong>" + (field.hint ? "<small>" + escapeHtml(field.hint) + "</small>" : "") + "</span>" + settingsControlMarkup(field, readSetting(tab.draft, field.key)) + "</label>"; }).join("") + "</section>"; }).join("");
     view.innerHTML = "<section class=\"settings-view\"><form id=\"settingsForm\"><header class=\"settings-head\"><div><p>Настройки</p><h1>Параметры приложения</h1></div><span>Изменения применяются после сохранения</span></header>" + markup + "<section class=\"settings-group\"><h2>Бэкапы вырезки</h2><div id=\"cutBackups\" class=\"cut-backups\">Загрузка…</div></section><footer class=\"settings-footer\"><span id=\"settingsState\">" + (tab.dirty ? "Есть несохранённые изменения" : "Сохранено") + "</span><button id=\"resetSettings\" type=\"button\" class=\"settings-reset\">Сбросить</button><button type=\"submit\" class=\"primary\">Сохранить</button></footer></form></section>";
     $("#settingsForm").querySelectorAll("[data-setting]").forEach(function(control) { control.addEventListener("change", function() { var field = SETTINGS_FIELDS.find(function(item) { return item.key === control.dataset.setting; }); var value = field.type === "checkbox" ? control.checked : field.type === "select" && typeof readSetting(tab.draft, field.key) === "number" ? Number(control.value) : control.value; writeSetting(tab.draft, field.key, value); tab.dirty = true; $("#settingsState").textContent = "Есть несохранённые изменения"; }); });
+    $("#settingsForm").querySelectorAll("[data-browse]").forEach(function(button) { button.addEventListener("click", async function(event) { event.preventDefault(); var folder = await window.folderVideo.chooseFolder(); if (!folder) return; var input = $("#settingsForm").querySelector("input[data-setting=\"" + button.dataset.browse + "\"]"); input.value = folder; input.dispatchEvent(new Event("change")); }); });
     $("#resetSettings").addEventListener("click", async function() { if (!confirm("Сбросить настройки к значениям по умолчанию?")) return; var result = await window.folderVideo.getDefaultSettings(); tab.draft = result.settings; tab.dirty = true; renderSettings(tab); });
     $("#settingsForm").addEventListener("submit", function(event) { event.preventDefault(); saveSettingsTab(tab); });
     renderCutBackups();
@@ -700,7 +779,7 @@
       if (!state.tabs.some(function(tab) { return tab.type === "folder"; })) state.tabs.unshift({ id: "folder", type: "folder", label: "Видео" });
     } else {
       state.tabs = [{ id: "folder", type: "folder", label: "Видео" }];
-      state.frameCache.clear(); state.durationCache.clear();
+      state.frameCache.clear(); state.durationCache.clear(); state.youtubeSourceCache.clear();
     }
     state.activeTab = "folder"; state.thumbnailGeneration += 1; state.stripCache.clear(); state.stripPending.clear(); await window.folderVideo.setTitle(folder); render(); await scanCurrentFolder();
   }
@@ -1277,6 +1356,12 @@
     favoriteButton.setAttribute("aria-label", favoriteButton.title);
     favoriteButton.textContent = favorite ? "♥" : "♡";
     $("#videoScreenshot").before(favoriteButton);
+    var youtubeButton = document.createElement("button");
+    youtubeButton.id = "playerYoutube";
+    youtubeButton.type = "button";
+    youtubeButton.className = "player-youtube";
+    youtubeButton.innerHTML = YOUTUBE_ICON;
+    favoriteButton.before(youtubeButton);
     var deleteButton = document.createElement("button");
     deleteButton.id = "playerDelete";
     deleteButton.className = "player-delete";
@@ -1344,6 +1429,12 @@
     $("#back").addEventListener("click", function() { flushPlayerNotes(tab); state.activeTab = "folder"; render(); });
     $("#reveal").addEventListener("click", function() { window.folderVideo.showInFolder(tab.video.path); });
     $("#playerFavorite").addEventListener("click", function() { toggleFavorite(tab.video); renderPlayer(tab); });
+    $("#playerYoutube").addEventListener("click", function() {
+      var info = currentYoutubeInfo(tab.video);
+      if (info.mode === "linked") openYoutubeSource(tab.video);
+      else if (info.mode === "none" || info.mode === "error") findYoutubeSource(tab.video, player);
+    });
+    applyYoutubeButton(tab.video); loadYoutubeSource(tab.video);
     $("#playerMove").addEventListener("click", function() { moveFile(tab.video.path); });
     $("#playerCut").addEventListener("click", function() { toggleCutBar(tab, player); $("#playerCut").classList.toggle("is-active", Boolean(tab.cut && tab.cut.open)); });
     $("#playerSpeed").addEventListener("click", function() { startSpeedUp(tab, player); });

@@ -11,6 +11,8 @@ const { UNDO_DIRECTORY, CutUndoStore } = require('./cut-undo');
 const { reencodeCodecArguments } = require('./cut-core');
 const { probeDuration, listKeyframes, planCut, executeCut } = require('./cut-ffmpeg');
 const { shiftNotes } = require('./notes-core');
+const youtubeLink = require('./youtube-link-core');
+const { readAuthorUrl, writeAuthorUrl } = require('./author-url-property');
 const { PeakCollector, SAMPLE_RATE, BINS_PER_SECOND } = require('./waveform-core');
 const { srtSegments, transcriptBatches, normalizeSummary, FRAME_COUNT, frameTimes, parseVideoLink, parseRegValue, playerLaunch, safeNoteName, buildObsidianArticle, buildObsidianAddendum } = require('./summary-core');
 
@@ -45,7 +47,7 @@ function defaultSettings() {
   return {
     version: 1,
     theme: 'dark',
-    storage: { metadataDirectory: path.join(app.getPath('documents'), 'folder-video-metadata'), gitRepositoryUrl: '', obsidianInbox: 'C:\\_ObsidianDB\\ai-study\\00 Inbox' },
+    storage: { metadataDirectory: path.join(app.getPath('documents'), 'folder-video-metadata'), gitRepositoryUrl: '', obsidianInbox: 'C:\\_ObsidianDB\\ai-study\\00 Inbox', transcriptDirectory: path.join(app.getPath('userData'), 'transcripts') },
     viewer: { columns: 3, seconds: 10, scroll: 'center', panelWidth: 410 },
     interface: { metadataCollapsed: false, gridCollapsed: false },
     cut: { replaceOriginal: true },
@@ -66,10 +68,12 @@ function normalizeSettings(value) {
   const gitRepositoryUrl = typeof source.storage?.gitRepositoryUrl === 'string' ? source.storage.gitRepositoryUrl.trim() : '';
   const obsidianInbox = typeof source.storage?.obsidianInbox === 'string' && source.storage.obsidianInbox.trim()
     ? path.resolve(source.storage.obsidianInbox) : defaults.storage.obsidianInbox;
+  const transcriptDirectory = typeof source.storage?.transcriptDirectory === 'string' && source.storage.transcriptDirectory.trim()
+    ? path.resolve(source.storage.transcriptDirectory) : defaults.storage.transcriptDirectory;
   return {
     version: 1,
     theme: source.theme === 'light' ? 'light' : 'dark',
-    storage: { metadataDirectory, gitRepositoryUrl, obsidianInbox }, viewer: { columns, seconds, scroll, panelWidth },
+    storage: { metadataDirectory, gitRepositoryUrl, obsidianInbox, transcriptDirectory }, viewer: { columns, seconds, scroll, panelWidth },
     interface: { metadataCollapsed: source.interface?.metadataCollapsed === true, gridCollapsed: source.interface?.gridCollapsed === true },
     cut: { replaceOriginal: source.cut?.replaceOriginal !== false },
     transcription: { modelPath: typeof source.transcription?.modelPath === 'string' ? source.transcription.modelPath.trim() : '' },
@@ -110,6 +114,7 @@ async function saveSettings(settings) {
     const newKey = typeof settings?.ai?.apiKey === 'string' ? settings.ai.apiKey.trim() : '';
     if (newKey && !safeStorage.isEncryptionAvailable()) return { error: 'Шифрование ключа недоступно в этой системе.' };
     await mkdir(normalized.storage.metadataDirectory, { recursive: true });
+    await mkdir(normalized.storage.transcriptDirectory, { recursive: true });
     await mkdir(path.dirname(settingsPath()), { recursive: true });
     if (newKey) await writeFile(deepSeekKeyPath(), safeStorage.encryptString(newKey));
     else if (settings?.ai?.clearKey === true) await unlink(deepSeekKeyPath()).catch(error => { if (error.code !== 'ENOENT') throw error; });
@@ -264,7 +269,7 @@ function outputPathForSpeedUp(filePath) {
   return path.join(parsed.dir, `${parsed.name}_2x${parsed.ext}`);
 }
 
-function transcriptDirectory() { return path.join(app.getPath('userData'), 'transcripts'); }
+function transcriptDirectory() { return appSettings?.storage?.transcriptDirectory || path.join(app.getPath('userData'), 'transcripts'); }
 function transcriptKey(filePath) { return createHash('sha256').update(filePath).digest('hex').slice(0, 12); }
 function transcriptStem(filePath) {
   const parsed = path.parse(filePath);
@@ -818,6 +823,60 @@ ipcMain.handle('folder-video:render-markdown', async (_event, markdown) => {
 
 ipcMain.handle('folder-video:open-metadata-link', async (_event, url) => {
   if (typeof url !== 'string' || (!isYouTubeUrl(url) && !isObsidianUrl(url))) return 'Некорректная ссылка';
+  return shell.openExternal(url);
+});
+function isSupportedVideoPath(filePath) { return typeof filePath === 'string' && VIDEO_EXTENSIONS.has(path.extname(filePath).toLowerCase()); }
+
+function runSearchTool(executable, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, args, { windowsHide: true }); let output = '';
+    const timer = setTimeout(() => { child.kill(); reject(new Error('Превышено время ожидания поиска')); }, 30000);
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.on('error', error => { clearTimeout(timer); reject(error); });
+    child.on('close', code => { clearTimeout(timer); code === 0 ? resolve(output) : reject(new Error('yt-dlp завершился с кодом ' + code)); });
+  });
+}
+
+async function searchYouTube(query) {
+  try {
+    const candidates = youtubeLink.parseYtDlpOutput(await runSearchTool('yt-dlp', ['--flat-playlist', '--dump-json', '--no-warnings', 'ytsearch' + youtubeLink.MAX_CANDIDATES + ':' + query]));
+    if (candidates.length) return candidates;
+  } catch { /* yt-dlp нет в PATH или он не справился — разбираем страницу поиска */ }
+  const response = await fetch('https://www.youtube.com/results?hl=ru&search_query=' + encodeURIComponent(query), {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36', 'Accept-Language': 'ru,en;q=0.8', Cookie: 'CONSENT=YES+1; SOCS=CAI' },
+    signal: AbortSignal.timeout(20000)
+  });
+  if (!response.ok) throw new Error('YouTube ответил кодом ' + response.status);
+  return youtubeLink.parseSearchHtml(await response.text());
+}
+
+ipcMain.handle('folder-video:youtube-read', async (_event, filePath) => {
+  try {
+    if (!isSupportedVideoPath(filePath)) return { error: 'Неподдерживаемый файл' };
+    if (!youtubeLink.isWritableExtension(path.extname(filePath))) return { supported: false, url: '' };
+    const result = await readAuthorUrl(filePath);
+    return { supported: result.supported, url: youtubeLink.isYouTubeVideoUrl(result.url) ? result.url : '', rawUrl: result.url };
+  } catch (error) { return { error: error.message }; }
+});
+ipcMain.handle('folder-video:youtube-search', async (_event, filePath, durationSeconds) => {
+  try {
+    if (!isSupportedVideoPath(filePath)) return { error: 'Неподдерживаемый файл' };
+    const query = youtubeLink.cleanSearchTitle(path.basename(filePath));
+    if (!query) return { error: 'Не удалось получить название для поиска' };
+    const candidates = await searchYouTube(query);
+    return { query, candidates, auto: youtubeLink.pickAutoCandidate(candidates, Number(durationSeconds)) };
+  } catch (error) { return { error: error.message }; }
+});
+ipcMain.handle('folder-video:youtube-write', async (_event, filePath, url) => {
+  try {
+    if (!isSupportedVideoPath(filePath) || !youtubeLink.isWritableExtension(path.extname(filePath))) return { error: 'Формат не поддерживает запись свойства' };
+    if (!youtubeLink.isYouTubeVideoUrl(url)) return { error: 'Некорректная ссылка YouTube' };
+    const result = await writeAuthorUrl(filePath, url);
+    return { url: result.url, warning: result.datesIntact ? '' : 'Не удалось полностью сохранить даты файла' };
+  } catch (error) { return { error: error.message }; }
+});
+ipcMain.handle('folder-video:youtube-open', async (_event, url) => {
+  if (!youtubeLink.isYouTubeVideoUrl(url)) return 'Некорректная ссылка';
   return shell.openExternal(url);
 });
 ipcMain.handle('folder-video:open-project-folder', async (_event, folderPath) => {

@@ -128,6 +128,8 @@ body.light .metadata-panel { background:#f5f7fa; border-color:#d1d9e4; } body.li
  .frame-controls .grid-control { margin-left:0; }
 /* AI summary and its chapter links */
 .settings-row input[type="text"],.settings-row input[type="password"] { width:min(430px,55%); height:32px; box-sizing:border-box; border:1px solid #384251; border-radius:6px; background:#10141a; color:var(--ink); padding:0 9px; font:11px "DM Mono",monospace; }
+.settings-folder { display:flex; gap:6px; align-items:center; width:min(430px,55%); }
+.settings-row .settings-folder input[type="text"] { flex:1; min-width:0; width:auto; }
 .summary-scroll { min-height:0; flex:1; overflow:auto; padding:14px 12px 20px; overscroll-behavior:contain; }
 .video-stage video { max-height:calc(100% - 158px); }
 .video-note-box { width:100%; flex:0 0 88px; display:flex; flex-direction:column; gap:5px; min-height:0; }
@@ -264,3 +266,31 @@ body.light .cut-range { background:rgba(217,72,111,.22); }
 .cut-controls .cut-run.cut-icon { border-color:#c25b7c; background:#3a202b; color:#ffd2df; }
 .cut-controls .cut-run.cut-icon:hover:not(:disabled) { background:#55283a; border-color:#ff6b8f; }
 body.light .cut-controls .cut-run.cut-icon { background:#ffe8ee; border-color:#d9486f; color:#8f1d3c; }
+
+/* source on YouTube */
+.player-youtube { width:28px; height:28px; flex:0 0 28px; border:1px solid #394352; border-radius:6px; background:#202630; color:#aebbd0; cursor:pointer; padding:4px; }
+.player-youtube svg { display:block; width:100%; height:100%; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.player-youtube:hover:not(:disabled) { border-color:#8d94a3; background:#2a313d; color:#e4e9f2; }
+.player-youtube.is-linked { border-color:#d9443b; background:#3a1f22; color:#ff6b61; }
+.player-youtube.is-linked svg { fill:currentColor; }
+.player-youtube.is-linked:hover:not(:disabled) { border-color:#ff6b61; background:#4a2327; color:#ff8a82; }
+.player-youtube:disabled { opacity:.5; cursor:default; }
+.player-youtube.is-busy { animation:youtube-pulse 1.1s ease-in-out infinite; }
+@keyframes youtube-pulse { 50% { opacity:.35; } }
+.youtube-picker { width:min(560px,calc(100vw - 32px)); }
+.youtube-picker-note { margin:0; padding:9px 12px 0; color:var(--muted); font-size:12px; }
+.youtube-candidate-text { min-width:0; flex:1; display:flex; flex-direction:column; gap:3px; }
+.youtube-candidate-text strong { font-size:13px; font-weight:600; line-height:1.3; overflow-wrap:anywhere; }
+.youtube-candidate-text span { color:var(--muted); font-size:11px; }
+.youtube-candidate-button { flex:0 0 auto; padding:5px 9px; border:1px solid #394352; border-radius:6px; background:#202630; color:#aebbd0; font-size:12px; cursor:pointer; }
+.youtube-candidate-button:hover { border-color:#8d94a3; color:#e4e9f2; }
+.youtube-candidate-button.is-primary { border-color:#d9443b; background:#3a1f22; color:#ff8a82; }
+.youtube-candidate-button.is-primary:hover { background:#4a2327; color:#ffb0a9; }
+body.light .player-youtube { background:#fff; border-color:#c7d0df; color:#4c5d75; }
+body.light .player-youtube:hover:not(:disabled) { background:#eef2f8; border-color:#8a97ad; color:#2a3a52; }
+body.light .player-youtube.is-linked { background:#ffe9e7; border-color:#d9443b; color:#c4291f; }
+body.light .player-youtube.is-linked:hover:not(:disabled) { background:#ffd9d5; border-color:#c4291f; color:#a51d14; }
+body.light .youtube-candidate-button { background:#fff; border-color:#c7d0df; color:#4c5d75; }
+body.light .youtube-candidate-button:hover { background:#eef2f8; color:#2a3a52; }
+body.light .youtube-candidate-button.is-primary { background:#ffe9e7; border-color:#d9443b; color:#c4291f; }
+body.light .youtube-candidate-button.is-primary:hover { background:#ffd9d5; color:#a51d14; }
