@@ -6,6 +6,15 @@
   const thumbnailQueue = new ThumbnailQueue(2);
   const supported = "MP4, WebM, MOV, AVI, MKV, M4V, OGV";
   const DEFAULT_SETTINGS = { version: 1, autoUpdate: true, theme: "dark", storage: { metadataDirectory: "", gitRepositoryUrl: "", obsidianInbox: "", transcriptDirectory: "" }, viewer: { columns: 3, seconds: 10, scroll: "center", panelWidth: 410 }, interface: { metadataCollapsed: false, gridCollapsed: false }, cut: { replaceOriginal: true }, transcription: { modelPath: "" }, ai: { model: "deepseek-flash", apiKey: "", keyConfigured: false, clearKey: false } };
+  const SETTINGS_SECTIONS = [
+    { id: "viewer", label: "Просмотр видео", hint: "Сетка кадров, временной шаг и прокрутка в плеере.", groups: ["Просмотр видео"], icon: "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z" },
+    { id: "interface", label: "Интерфейс", hint: "Вид панелей при открытии видео.", groups: ["Интерфейс"], icon: "M3 4h18v16H3z M3 9h18 M9 9v11" },
+    { id: "storage", label: "Хранилище", hint: "Метаданные видео, Git-репозиторий и статьи Obsidian.", groups: ["Хранилище"], icon: "M3 7V4h7l2 3h9v13H3z" },
+    { id: "transcription", label: "Транскрибация", hint: "Локальная модель распознавания и папка субтитров, сводок и заметок.", groups: ["Транскрибация"], icon: "M4 10v4 M8 6v12 M12 3v18 M16 7v10 M20 10v4" },
+    { id: "summary", label: "Суммаризация", hint: "Подключение DeepSeek для создания сводок по транскрипции.", groups: ["Суммаризация"], icon: "m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5z" },
+    { id: "cut", label: "Вырезка и бэкапы", hint: "Сохранение результата вырезки и восстановление оригиналов.", groups: ["Вырезка фрагментов"], icon: "M20 4 8 16 M8 8l12 12 M14 14l-2-2 M9 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0 M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0" },
+    { id: "updates", label: "Обновления", hint: "Проверка новых версий и установка обновлений приложения.", groups: ["Обновления"], icon: "M20 7v5h-5 M4 17v-5h5 M6 6a8 8 0 0 1 13 2 M18 18a8 8 0 0 1-13-2" }
+  ];
   const SETTINGS_FIELDS = [
     { group: "Обновления", key: "autoUpdate", label: "Проверять при запуске", type: "checkbox", hint: "Проверка через 10 секунд после запуска. Установка — после нажатия «Обновить»." },
     { group: "Хранилище", key: "storage.metadataDirectory", label: "Каталог метаданных", type: "text", hint: "JSON-файлы и template.html" },
@@ -593,29 +602,65 @@
     state.activeTab = tab.id; render();
   }
   function settingsControlMarkup(field, value) {
-    if (field.type === "password") return "<input data-setting=\"" + field.key + "\" type=\"password\" autocomplete=\"off\" placeholder=\"" + (state.settings.ai.keyConfigured ? "Ключ сохранён" : "Введите API-ключ") + "\" value=\"\" />";
-    if (field.type === "folder") return "<span class=\"settings-folder\"><input data-setting=\"" + field.key + "\" type=\"text\" value=\"" + escapeHtml(value) + "\" /><button type=\"button\" class=\"settings-reset\" data-browse=\"" + field.key + "\" title=\"Выбрать папку\" aria-label=\"Выбрать папку: " + escapeHtml(field.label) + "\">Обзор…</button></span>";
-    if (field.type === "text") return "<input data-setting=\"" + field.key + "\" type=\"text\" value=\"" + escapeHtml(value) + "\" />";
-    if (field.type === "checkbox") return "<label class=\"settings-switch\"><input data-setting=\"" + field.key + "\" type=\"checkbox\"" + (value ? " checked" : "") + "/><span></span></label>";
+    var id = "setting-" + field.key.split(".").join("-");
+    var attributes = ' id="' + id + '" data-setting="' + field.key + '" title="' + escapeHtml(field.label) + '"' + (field.hint ? ' aria-describedby="' + id + '-hint"' : "");
+    if (field.type === "password") return '<input' + attributes + ' type="password" autocomplete="off" placeholder="' + (state.settings.ai.keyConfigured ? "Ключ сохранён" : "Введите API-ключ") + '" value="' + escapeHtml(value || "") + '" />';
+    if (field.type === "folder") return '<span class="settings-folder"><input' + attributes + ' type="text" value="' + escapeHtml(value) + '" /><button type="button" class="settings-reset" data-browse="' + field.key + '" title="Выбрать папку" aria-label="Выбрать папку: ' + escapeHtml(field.label) + '">Обзор…</button></span>';
+    if (field.type === "text") return '<input' + attributes + ' type="text" value="' + escapeHtml(value) + '" />';
+    if (field.type === "checkbox") return '<span class="settings-switch"><input' + attributes + ' type="checkbox"' + (value ? " checked" : "") + '/><span aria-hidden="true"></span></span>';
     var options = field.options.map(function(option) { var item = typeof option === "object" ? option : { value: option, label: String(option) + (field.suffix ? " " + field.suffix : "") }; return "<option value=\"" + escapeHtml(item.value) + "\"" + (String(item.value) === String(value) ? " selected" : "") + ">" + escapeHtml(item.label) + "</option>"; }).join("");
-    return "<select data-setting=\"" + field.key + "\">" + options + "</select>";
+    return "<select" + attributes + ">" + options + "</select>";
+  }
+  function settingsFieldMarkup(field, tab) {
+    var id = "setting-" + field.key.split(".").join("-");
+    return '<div class="settings-row' + (field.type === "checkbox" ? ' settings-row--switch' : '') + '"><label class="settings-label" for="' + id + '"><strong>' + escapeHtml(field.label) + '</strong>' + (field.hint ? '<small id="' + id + '-hint">' + escapeHtml(field.hint) + '</small>' : '') + '</label><div class="settings-control">' + settingsControlMarkup(field, readSetting(tab.draft, field.key)) + '</div></div>';
+  }
+  function settingsIconMarkup(section) {
+    return '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + section.icon + '"></path></svg>';
   }
   function renderSettings(tab) {
-    var groups = SETTINGS_FIELDS.reduce(function(result, field) { (result[field.group] || (result[field.group] = [])).push(field); return result; }, {});
-    var markup = Object.keys(groups).map(function(group) {
-      var rows = groups[group].map(function(field) { return "<label class=\"settings-row\"><span><strong>" + escapeHtml(field.label) + "</strong>" + (field.hint ? "<small>" + escapeHtml(field.hint) + "</small>" : "") + "</span>" + settingsControlMarkup(field, readSetting(tab.draft, field.key)) + "</label>"; }).join("");
-      if (group === "Обновления") rows += '<div class="settings-row"><span><strong>Версия приложения</strong><small id="updateStatus" class="update-status" role="status" aria-live="polite"></small></span><button id="checkUpdates" class="settings-reset" type="button" title="Проверить наличие новой версии Folder-video" aria-label="Проверить обновление Folder-video">Проверить обновление</button></div>';
-      return '<section class="settings-group"><h2>' + escapeHtml(group) + '</h2>' + rows + '</section>';
+    var restoreTop = tab.settingsScrollTop || 0;
+    var navigation = SETTINGS_SECTIONS.map(function(section) {
+      return '<a href="#settings-' + section.id + '" data-settings-section="' + section.id + '" title="' + escapeHtml(section.label) + '">' + settingsIconMarkup(section) + '<span>' + escapeHtml(section.label) + '</span></a>';
     }).join("");
-    view.innerHTML = "<section class=\"settings-view\"><form id=\"settingsForm\"><header class=\"settings-head\"><div><p>Настройки</p><h1>Параметры приложения</h1></div><span>Изменения применяются после сохранения</span></header>" + markup + "<section class=\"settings-group\"><h2>Бэкапы вырезки</h2><div id=\"cutBackups\" class=\"cut-backups\">Загрузка…</div></section><footer class=\"settings-footer\"><span id=\"settingsState\">" + (tab.dirty ? "Есть несохранённые изменения" : "Сохранено") + "</span><button id=\"resetSettings\" type=\"button\" class=\"settings-reset\">Сбросить</button><button type=\"submit\" class=\"primary\">Сохранить</button></footer></form></section>";
+    var markup = SETTINGS_SECTIONS.map(function(section) {
+      var rows = SETTINGS_FIELDS.filter(function(field) { return section.groups.includes(field.group); }).map(function(field) { return settingsFieldMarkup(field, tab); }).join("");
+      if (section.id === "updates") rows += '<div class="settings-row"><div class="settings-label"><strong>Проверка версии</strong><small id="updateStatus" class="update-status" role="status" aria-live="polite"></small></div><div class="settings-control"><button id="checkUpdates" class="settings-reset" type="button" title="Проверить наличие новой версии Folder-video" aria-label="Проверить обновление Folder-video">Проверить обновление</button></div></div>';
+      var backups = section.id === "cut" ? '<div class="settings-group"><header class="settings-card-heading"><h3>Бэкапы вырезки</h3></header><div id="cutBackups" class="cut-backups">Загрузка…</div></div>' : "";
+      return '<section id="settings-' + section.id + '" class="settings-section" aria-labelledby="settings-title-' + section.id + '"><header class="settings-section-heading"><h2 id="settings-title-' + section.id + '">' + escapeHtml(section.label) + '</h2><p>' + escapeHtml(section.hint) + '</p></header><div class="settings-group">' + rows + '</div>' + backups + '</section>';
+    }).join("");
+    view.innerHTML = '<section class="settings-view"><form id="settingsForm" class="settings-layout"><nav class="settings-nav" aria-label="Разделы настроек"><p class="settings-nav-title">Настройки</p><div class="settings-nav-links">' + navigation + '</div><p class="settings-save-hint">Изменения применяются<br>после сохранения.</p></nav><div class="settings-main"><div class="settings-body" id="settingsBody"><header class="settings-heading"><h1>Настройки</h1><p>Выберите раздел слева или прокрутите страницу.</p></header>' + markup + '</div><footer class="settings-footer"><span id="settingsState" role="status" aria-live="polite">' + (tab.dirty ? "Есть несохранённые изменения" : "Все изменения сохранены") + '</span><button id="resetSettings" type="button" class="settings-reset" title="Вернуть значения по умолчанию">Сбросить</button><button type="submit" class="settings-save" title="Сохранить все настройки">Сохранить изменения</button></footer></div></form></section>';
+    var body = $("#settingsBody");
+    var links = Array.from(view.querySelectorAll("[data-settings-section]"));
+    function trackSection() {
+      var top = body.getBoundingClientRect().top + 64;
+      var current = SETTINGS_SECTIONS[0].id;
+      SETTINGS_SECTIONS.forEach(function(section) { if ($("#settings-" + section.id).getBoundingClientRect().top <= top) current = section.id; });
+      links.forEach(function(link) {
+        if (link.dataset.settingsSection === current) link.setAttribute("aria-current", "location");
+        else link.removeAttribute("aria-current");
+      });
+      tab.settingsScrollTop = body.scrollTop;
+    }
+    links.forEach(function(link) {
+      link.addEventListener("click", function(event) {
+        event.preventDefault();
+        var target = $("#settings-" + link.dataset.settingsSection);
+        body.scrollTo({ top: body.scrollTop + target.getBoundingClientRect().top - body.getBoundingClientRect().top - 24 });
+        trackSection();
+      });
+    });
+    body.addEventListener("scroll", trackSection, { passive: true });
+    body.scrollTop = restoreTop;
+    trackSection();
     showUpdateStatus(updateStatus);
     $("#checkUpdates").addEventListener("click", async function() {
       showUpdateStatus({ busy: true, message: "Проверка обновлений…", error: false });
       try { showUpdateStatus(await window.folderVideo.checkForUpdate()); }
       catch (error) { showUpdateStatus({ busy: false, message: error.message || String(error), error: true }); }
     });
-    $("#settingsForm").querySelectorAll("[data-setting]").forEach(function(control) { control.addEventListener("change", function() { var field = SETTINGS_FIELDS.find(function(item) { return item.key === control.dataset.setting; }); var value = field.type === "checkbox" ? control.checked : field.type === "select" && typeof readSetting(tab.draft, field.key) === "number" ? Number(control.value) : control.value; writeSetting(tab.draft, field.key, value); tab.dirty = true; $("#settingsState").textContent = "Есть несохранённые изменения"; }); });
-    $("#settingsForm").querySelectorAll("[data-browse]").forEach(function(button) { button.addEventListener("click", async function(event) { event.preventDefault(); var folder = await window.folderVideo.chooseFolder(); if (!folder) return; var input = $("#settingsForm").querySelector("input[data-setting=\"" + button.dataset.browse + "\"]"); input.value = folder; input.dispatchEvent(new Event("change")); }); });
+    $("#settingsForm").querySelectorAll("[data-setting]").forEach(function(control) { control.addEventListener(control.tagName === "INPUT" && control.type !== "checkbox" ? "input" : "change", function() { var field = SETTINGS_FIELDS.find(function(item) { return item.key === control.dataset.setting; }); var value = field.type === "checkbox" ? control.checked : field.type === "select" && typeof readSetting(tab.draft, field.key) === "number" ? Number(control.value) : control.value; writeSetting(tab.draft, field.key, value); tab.dirty = true; $("#settingsState").textContent = "Есть несохранённые изменения"; }); });
+    $("#settingsForm").querySelectorAll("[data-browse]").forEach(function(button) { button.addEventListener("click", async function(event) { event.preventDefault(); var folder = await window.folderVideo.chooseFolder(); if (!folder) return; var input = $("#settingsForm").querySelector("input[data-setting=\"" + button.dataset.browse + "\"]"); input.value = folder; input.dispatchEvent(new Event("input")); }); });
     $("#resetSettings").addEventListener("click", async function() { if (!confirm("Сбросить настройки к значениям по умолчанию?")) return; var result = await window.folderVideo.getDefaultSettings(); tab.draft = result.settings; tab.dirty = true; renderSettings(tab); });
     $("#settingsForm").addEventListener("submit", function(event) { event.preventDefault(); saveSettingsTab(tab); });
     renderCutBackups();
