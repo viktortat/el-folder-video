@@ -52,7 +52,7 @@ public static class FvAuthorUrl {
   [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
   static extern int SHGetPropertyStoreFromParsingName(string path, IntPtr bc, int flags, ref Guid riid, out IPropertyStore store);
   [DllImport("ole32.dll")] static extern int PropVariantClear(ref PROPVARIANT v);
-  static PROPERTYKEY Key() { PROPERTYKEY k; k.fmtid = new Guid("64440492-4C8B-11D1-8B70-080036B11A03"); k.pid = 17; return k; }
+  static PROPERTYKEY Key() { PROPERTYKEY k; k.fmtid = new Guid("64440492-4C8B-11D1-8B70-080036B11A03"); k.pid = 32; return k; }
   static IPropertyStore Open(string path, int flags) {
     Guid iid = new Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"); IPropertyStore store;
     Marshal.ThrowExceptionForHR(SHGetPropertyStoreFromParsingName(path, IntPtr.Zero, flags, ref iid, out store));
