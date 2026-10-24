@@ -5,8 +5,9 @@
   const notesCore = window.NotesCore;
   const thumbnailQueue = new ThumbnailQueue(2);
   const supported = "MP4, WebM, MOV, AVI, MKV, M4V, OGV";
-  const DEFAULT_SETTINGS = { version: 1, theme: "dark", storage: { metadataDirectory: "", gitRepositoryUrl: "", obsidianInbox: "", transcriptDirectory: "" }, viewer: { columns: 3, seconds: 10, scroll: "center", panelWidth: 410 }, interface: { metadataCollapsed: false, gridCollapsed: false }, cut: { replaceOriginal: true }, transcription: { modelPath: "" }, ai: { model: "deepseek-flash", apiKey: "", keyConfigured: false, clearKey: false } };
+  const DEFAULT_SETTINGS = { version: 1, autoUpdate: true, theme: "dark", storage: { metadataDirectory: "", gitRepositoryUrl: "", obsidianInbox: "", transcriptDirectory: "" }, viewer: { columns: 3, seconds: 10, scroll: "center", panelWidth: 410 }, interface: { metadataCollapsed: false, gridCollapsed: false }, cut: { replaceOriginal: true }, transcription: { modelPath: "" }, ai: { model: "deepseek-flash", apiKey: "", keyConfigured: false, clearKey: false } };
   const SETTINGS_FIELDS = [
+    { group: "Обновления", key: "autoUpdate", label: "Проверять при запуске", type: "checkbox", hint: "Проверка через 10 секунд после запуска. Установка — после нажатия «Обновить»." },
     { group: "Хранилище", key: "storage.metadataDirectory", label: "Каталог метаданных", type: "text", hint: "JSON-файлы и template.html" },
     { group: "Хранилище", key: "storage.gitRepositoryUrl", label: "Git-репозиторий", type: "text", hint: "URL удалённого репозитория" },
     { group: "Хранилище", key: "storage.obsidianInbox", label: "Папка статей Obsidian", type: "text", hint: "Сюда кнопка в шапке панели сохраняет сводную статью по видео" },
@@ -45,6 +46,29 @@
   const appVersion = $("#appVersion");
   let toastTimer;
   let resizeTimer;
+  let updateStatus = { busy: false, message: "", error: false };
+
+  function showUpdateStatus(status) {
+    updateStatus = status;
+    var button = $("#checkUpdates");
+    if (button) {
+      button.disabled = status.busy;
+      button.textContent = status.busy ? "Подождите…" : "Проверить обновление";
+      button.setAttribute("aria-busy", String(status.busy));
+    }
+    var text = $("#updateStatus");
+    if (text) { text.textContent = status.message || "Проверить наличие новой версии Folder-video"; text.classList.toggle("error", status.error); }
+    $("#updateActivity").textContent = status.busy ? status.message : "";
+  }
+  window.folderVideo.onUpdateStatus(showUpdateStatus);
+  window.folderVideo.getUpdateState().then(showUpdateStatus).catch(function() {});
+  window.folderVideo.onPrepareUpdate(async function() {
+    if (state.cutJob || state.speedUp || state.transcript || state.youtubeBusy.size) throw new Error("Дождитесь завершения обработки видео и повторите обновление.");
+    if (state.tabs.some(function(tab) { return tab.metadataDirty || (tab.type === "settings" && tab.dirty); })) throw new Error("Сохраните изменения метаданных и настроек перед обновлением.");
+    var players = state.tabs.filter(function(tab) { return tab.type === "player"; });
+    await Promise.all(players.map(flushPlayerNotes));
+    if (players.some(function(tab) { return tab.notesDirty || tab.notesError; })) throw new Error("Не удалось сохранить заметки. Сохраните их перед обновлением.");
+  });
 
   window.folderVideo.onSpeedUpProgress(function(progress) {
     if (!state.speedUp || progress.operationId !== state.speedUp.operationId) return;
@@ -578,8 +602,18 @@
   }
   function renderSettings(tab) {
     var groups = SETTINGS_FIELDS.reduce(function(result, field) { (result[field.group] || (result[field.group] = [])).push(field); return result; }, {});
-    var markup = Object.keys(groups).map(function(group) { return "<section class=\"settings-group\"><h2>" + escapeHtml(group) + "</h2>" + groups[group].map(function(field) { return "<label class=\"settings-row\"><span><strong>" + escapeHtml(field.label) + "</strong>" + (field.hint ? "<small>" + escapeHtml(field.hint) + "</small>" : "") + "</span>" + settingsControlMarkup(field, readSetting(tab.draft, field.key)) + "</label>"; }).join("") + "</section>"; }).join("");
+    var markup = Object.keys(groups).map(function(group) {
+      var rows = groups[group].map(function(field) { return "<label class=\"settings-row\"><span><strong>" + escapeHtml(field.label) + "</strong>" + (field.hint ? "<small>" + escapeHtml(field.hint) + "</small>" : "") + "</span>" + settingsControlMarkup(field, readSetting(tab.draft, field.key)) + "</label>"; }).join("");
+      if (group === "Обновления") rows += '<div class="settings-row"><span><strong>Версия приложения</strong><small id="updateStatus" class="update-status" role="status" aria-live="polite"></small></span><button id="checkUpdates" class="settings-reset" type="button" title="Проверить наличие новой версии Folder-video" aria-label="Проверить обновление Folder-video">Проверить обновление</button></div>';
+      return '<section class="settings-group"><h2>' + escapeHtml(group) + '</h2>' + rows + '</section>';
+    }).join("");
     view.innerHTML = "<section class=\"settings-view\"><form id=\"settingsForm\"><header class=\"settings-head\"><div><p>Настройки</p><h1>Параметры приложения</h1></div><span>Изменения применяются после сохранения</span></header>" + markup + "<section class=\"settings-group\"><h2>Бэкапы вырезки</h2><div id=\"cutBackups\" class=\"cut-backups\">Загрузка…</div></section><footer class=\"settings-footer\"><span id=\"settingsState\">" + (tab.dirty ? "Есть несохранённые изменения" : "Сохранено") + "</span><button id=\"resetSettings\" type=\"button\" class=\"settings-reset\">Сбросить</button><button type=\"submit\" class=\"primary\">Сохранить</button></footer></form></section>";
+    showUpdateStatus(updateStatus);
+    $("#checkUpdates").addEventListener("click", async function() {
+      showUpdateStatus({ busy: true, message: "Проверка обновлений…", error: false });
+      try { showUpdateStatus(await window.folderVideo.checkForUpdate()); }
+      catch (error) { showUpdateStatus({ busy: false, message: error.message || String(error), error: true }); }
+    });
     $("#settingsForm").querySelectorAll("[data-setting]").forEach(function(control) { control.addEventListener("change", function() { var field = SETTINGS_FIELDS.find(function(item) { return item.key === control.dataset.setting; }); var value = field.type === "checkbox" ? control.checked : field.type === "select" && typeof readSetting(tab.draft, field.key) === "number" ? Number(control.value) : control.value; writeSetting(tab.draft, field.key, value); tab.dirty = true; $("#settingsState").textContent = "Есть несохранённые изменения"; }); });
     $("#settingsForm").querySelectorAll("[data-browse]").forEach(function(button) { button.addEventListener("click", async function(event) { event.preventDefault(); var folder = await window.folderVideo.chooseFolder(); if (!folder) return; var input = $("#settingsForm").querySelector("input[data-setting=\"" + button.dataset.browse + "\"]"); input.value = folder; input.dispatchEvent(new Event("change")); }); });
     $("#resetSettings").addEventListener("click", async function() { if (!confirm("Сбросить настройки к значениям по умолчанию?")) return; var result = await window.folderVideo.getDefaultSettings(); tab.draft = result.settings; tab.dirty = true; renderSettings(tab); });

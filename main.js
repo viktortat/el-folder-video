@@ -1,5 +1,8 @@
-const { app, BrowserWindow, dialog, ipcMain, shell, nativeImage, Menu, clipboard, safeStorage } = require('electron');
-const { readdir, lstat, rename, copyFile, unlink, readFile, writeFile, mkdir, rm } = require('node:fs/promises');
+const { app, BrowserWindow, dialog, ipcMain, shell, nativeImage, Menu, clipboard, safeStorage, net } = require('electron');
+const { readdir, lstat, rename, copyFile, unlink, readFile, writeFile, mkdir, rm, mkdtemp } = require('node:fs/promises');
+const { createWriteStream } = require('node:fs');
+const { Readable, Transform } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
@@ -14,6 +17,7 @@ const { shiftNotes } = require('./notes-core');
 const youtubeLink = require('./youtube-link-core');
 const { readAuthorUrl, writeAuthorUrl } = require('./author-url-property');
 const { PeakCollector, SAMPLE_RATE, BINS_PER_SECOND } = require('./waveform-core');
+const { RELEASES_API, compareVersions, latestRelease } = require('./update-core');
 const { srtSegments, transcriptBatches, normalizeSummary, FRAME_COUNT, frameTimes, parseVideoLink, parseRegValue, playerLaunch, safeNoteName, buildObsidianArticle, buildObsidianAddendum } = require('./summary-core');
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.avi', '.mkv', '.m4v', '.ogv']);
@@ -46,6 +50,7 @@ let hasSettingsFile = false;
 function defaultSettings() {
   return {
     version: 1,
+    autoUpdate: true,
     theme: 'dark',
     storage: { metadataDirectory: path.join(app.getPath('documents'), 'folder-video-metadata'), gitRepositoryUrl: '', obsidianInbox: 'C:\\_ObsidianDB\\ai-study\\00 Inbox', transcriptDirectory: path.join(app.getPath('userData'), 'transcripts') },
     viewer: { columns: 3, seconds: 10, scroll: 'center', panelWidth: 410 },
@@ -72,6 +77,7 @@ function normalizeSettings(value) {
     ? path.resolve(source.storage.transcriptDirectory) : defaults.storage.transcriptDirectory;
   return {
     version: 1,
+    autoUpdate: source.autoUpdate !== false,
     theme: source.theme === 'light' ? 'light' : 'dark',
     storage: { metadataDirectory, gitRepositoryUrl, obsidianInbox, transcriptDirectory }, viewer: { columns, seconds, scroll, panelWidth },
     interface: { metadataCollapsed: source.interface?.metadataCollapsed === true, gridCollapsed: source.interface?.gridCollapsed === true },
@@ -137,6 +143,160 @@ if (require('electron-squirrel-startup')) app.quit();
 app.setAppUserModelId('com.squirrel.folder_video.folder-video');
 Menu.setApplicationMenu(null);
 
+let updateState = { busy: false, message: '', error: false };
+let updatePreparation = null;
+
+function setUpdateState(busy, message, error = false) {
+  updateState = { busy, message, error };
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) window.webContents.send('folder-video:update-status', updateState);
+  }
+  return updateState;
+}
+
+async function installedUpdateExe() {
+  if (!app.isPackaged || process.platform !== 'win32' || process.arch !== 'x64' || !process.env.LOCALAPPDATA) return null;
+  const root = path.join(process.env.LOCALAPPDATA, 'folder_video');
+  const expected = path.join(root, `app-${APP_VERSION}`, 'folder-video.exe');
+  if (path.resolve(process.execPath).toLowerCase() !== path.resolve(expected).toLowerCase()) return null;
+  const executable = path.join(root, 'Update.exe');
+  return await lstat(executable).then(stat => stat.isFile() ? executable : null, () => null);
+}
+
+async function fetchUpdateRelease() {
+  const signal = AbortSignal.timeout(15000);
+  let latest = null;
+  // Общий репозиторий: релизы других приложений могут занимать всю первую страницу.
+  for (let page = 1; ; page++) {
+    const response = await net.fetch(`${RELEASES_API}?per_page=100&page=${page}`, {
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Folder-video', 'X-GitHub-Api-Version': '2022-11-28' }, signal
+    });
+    if (!response.ok) throw new Error(`GitHub ответил ${response.status}`);
+    const list = await response.json();
+    if (!Array.isArray(list)) throw new Error('Некорректный ответ GitHub');
+    const candidate = latestRelease(list);
+    if (candidate && (!latest || compareVersions(candidate.version, latest.version) > 0)) latest = candidate;
+    if (list.length < 100) return latest;
+  }
+}
+
+function prepareRendererForUpdate() {
+  const window = BrowserWindow.getAllWindows()[0];
+  if (!window || window.isDestroyed() || !isRendererReady) throw new Error('Окно приложения ещё не готово. Повторите проверку.');
+  return new Promise((resolve, reject) => {
+    const id = createHash('sha256').update(`${Date.now()}-${Math.random()}`).digest('hex');
+    const timer = setTimeout(() => {
+      updatePreparation = null;
+      reject(new Error('Не удалось дождаться сохранения заметок. Повторите обновление.'));
+    }, 15000);
+    updatePreparation = { id, sender: window.webContents, finish(error) {
+      clearTimeout(timer);
+      updatePreparation = null;
+      if (error) reject(new Error(error)); else resolve();
+    } };
+    window.webContents.send('folder-video:update-prepare', id);
+  });
+}
+
+function updateWorkInProgress() {
+  return cutJob || transcriptJobs.size || summaryJobs.size || obsidianJobs.size || metadataJobs.size;
+}
+
+function powershellLiteral(value) { return "'" + value.replace(/'/g, "''") + "'"; }
+
+async function installUpdate(release, updateExe) {
+  const tempRoot = path.resolve(app.getPath('temp'));
+  const directory = await mkdtemp(path.join(tempRoot, 'folder-video-update-'));
+  // Проверка также ограничивает рекурсивное удаление в отдельном процессе установки.
+  if (path.dirname(directory) !== tempRoot || !path.basename(directory).startsWith('folder-video-update-')) throw new Error('Некорректный временный каталог');
+  const file = path.join(directory, 'folder-video-setup.exe');
+  const log = path.join(app.getPath('userData'), 'update-error.txt');
+  let handedOff = false;
+  try {
+    setUpdateState(true, `Загрузка обновления ${release.version}…`);
+    const signal = AbortSignal.timeout(10 * 60 * 1000);
+    const response = await net.fetch(release.url, { headers: { 'User-Agent': 'Folder-video' }, signal });
+    if (!response.ok || !response.body) throw new Error(`Не удалось скачать установщик: HTTP ${response.status}`);
+    const hash = createHash('sha256');
+    let received = 0;
+    let lastPercent = -1;
+    const progress = new Transform({ transform(chunk, _encoding, callback) {
+      received += chunk.length;
+      if (received > release.size) return callback(new Error('Размер установщика превышает указанный в релизе'));
+      hash.update(chunk);
+      const percent = Math.floor(received * 100 / release.size);
+      if (percent !== lastPercent) {
+        lastPercent = percent;
+        setUpdateState(true, `Загрузка обновления ${release.version}: ${percent}%`);
+      }
+      callback(null, chunk);
+    } });
+    await pipeline(Readable.fromWeb(response.body), progress, createWriteStream(file, { flags: 'wx' }), { signal });
+    if (received !== release.size) throw new Error('Установщик скачан не полностью');
+    if (release.sha256 && hash.digest('hex') !== release.sha256) throw new Error('Контрольная сумма SHA-256 установщика не совпала');
+    if (updateWorkInProgress()) throw new Error('Дождитесь завершения обработки видео и повторите обновление.');
+    await prepareRendererForUpdate();
+    await Promise.all(notesSaveJobs.values());
+    if (updateWorkInProgress()) throw new Error('Дождитесь завершения обработки видео и повторите обновление.');
+    await mkdir(app.getPath('userData'), { recursive: true });
+    await rm(log, { force: true });
+    // Без cmd.exe: пути передаются литералами PowerShell, включая пробелы и апострофы.
+    // Помощник ждёт фактического выхода приложения, затем устанавливает и запускает его.
+    const script = `$ErrorActionPreference = 'Stop'
+try {
+  Wait-Process -Id ${process.pid} -Timeout 120 -ErrorAction SilentlyContinue
+  if (Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue) { throw 'Приложение не завершилось за 120 секунд' }
+  $installer = Start-Process -FilePath ${powershellLiteral(file)} -ArgumentList '--silent' -Wait -PassThru -WindowStyle Hidden
+  if ($installer.ExitCode -ne 0) { throw "Установщик завершился с кодом $($installer.ExitCode)" }
+} catch {
+  [System.IO.File]::WriteAllText(${powershellLiteral(log)}, $_.Exception.Message)
+} finally {
+  Remove-Item -LiteralPath ${powershellLiteral(directory)} -Recurse -Force -ErrorAction SilentlyContinue
+  Start-Process -FilePath ${powershellLiteral(updateExe)} -ArgumentList '--processStart', 'folder-video.exe' -WindowStyle Hidden
+}`;
+    await new Promise((resolve, reject) => {
+      const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { detached: true, stdio: 'ignore', windowsHide: true });
+      child.once('error', reject);
+      child.once('spawn', () => { child.unref(); resolve(); });
+    });
+    handedOff = true;
+    setUpdateState(true, 'Установка обновления. Приложение перезапустится…');
+    app.quit();
+  } finally {
+    if (!handedOff) await rm(directory, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function checkForUpdate(manual) {
+  if (updateState.busy) return updateState;
+  setUpdateState(true, 'Проверка обновлений…');
+  let accepted = false;
+  try {
+    const updateExe = await installedUpdateExe();
+    if (!updateExe) return setUpdateState(false, manual ? 'Обновление доступно в Windows x64 после установки через folder-video-setup.exe.' : '');
+    const release = await fetchUpdateRelease();
+    if (!release || compareVersions(release.version, APP_VERSION) <= 0) return setUpdateState(false, `Установлена последняя версия (${APP_VERSION}).`);
+    if (updateWorkInProgress()) return setUpdateState(false, 'Доступно обновление. Повторите проверку после завершения обработки видео.');
+    const window = BrowserWindow.getAllWindows()[0];
+    if (!window || window.isDestroyed()) return setUpdateState(false, '');
+    const result = await dialog.showMessageBox(window, {
+      type: 'question', title: 'Обновление Folder-video',
+      message: `Доступна версия ${release.version} (сейчас ${APP_VERSION}).`,
+      detail: 'Приложение скачает установщик, закроется и запустится снова.' + (release.notes ? `\n\n${release.notes.slice(0, 6000)}` : ''),
+      buttons: ['Обновить', 'Позже'], defaultId: 0, cancelId: 1, noLink: true
+    });
+    if (result.response !== 0) return setUpdateState(false, `Доступна версия ${release.version}.`);
+    accepted = true;
+    await installUpdate(release, updateExe);
+    return updateState;
+  } catch (error) {
+    const message = `Не удалось ${accepted ? 'установить' : 'проверить'} обновление: ${error.message}`;
+    const result = setUpdateState(false, manual || accepted ? message : '', manual || accepted);
+    if (accepted && !manual) await dialog.showMessageBox({ type: 'error', title: 'Обновление Folder-video', message });
+    return result;
+  }
+}
+
 function createWindow() {
   isRendererReady = false;
   const mainWindow = new BrowserWindow({
@@ -158,6 +318,13 @@ function createWindow() {
   // before loading the renderer to avoid running a stale app.js after an update.
   mainWindow.webContents.once('did-finish-load', () => {
     isRendererReady = true;
+    // Если отдельный установщик завершился с ошибкой, сообщаем после повторного запуска.
+    const updateLog = path.join(app.getPath('userData'), 'update-error.txt');
+    readFile(updateLog, 'utf8').then(async message => {
+      setUpdateState(false, `Не удалось установить обновление: ${message}`, true);
+      await dialog.showMessageBox(mainWindow, { type: 'error', title: 'Обновление Folder-video', message: 'Не удалось установить обновление', detail: message });
+      await rm(updateLog, { force: true });
+    }).catch(() => {});
     if (pendingLaunchTarget) {
       mainWindow.webContents.send('folder-video:open-target', pendingLaunchTarget);
       pendingLaunchTarget = null;
@@ -1247,6 +1414,11 @@ ipcMain.handle('folder-video:set-title', (event, folderPath) => {
 });
 
 ipcMain.handle('folder-video:get-app-info', () => ({ version: APP_VERSION }));
+ipcMain.handle('folder-video:check-update', () => checkForUpdate(true));
+ipcMain.handle('folder-video:get-update-state', () => updateState);
+ipcMain.handle('folder-video:update-ready', (event, id, error) => {
+  if (updatePreparation?.id === id && updatePreparation.sender === event.sender) updatePreparation.finish(typeof error === 'string' ? error : null);
+});
 ipcMain.handle('folder-video:get-settings', () => ({ settings: appSettings, hasConfig: hasSettingsFile }));
 ipcMain.handle('folder-video:get-default-settings', () => ({ settings: defaultSettings() }));
 ipcMain.handle('folder-video:save-settings', async (_event, settings) => saveSettings(settings));
@@ -1278,6 +1450,8 @@ app.whenReady().then(async () => {
   openMetadataStore();
   openCutUndoStore();
   createWindow();
+  const updateTimer = setTimeout(() => { if (appSettings.autoUpdate) void checkForUpdate(false); }, 10000);
+  updateTimer.unref();
   openLaunchTarget(process.argv);
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

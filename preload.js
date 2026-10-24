@@ -61,6 +61,22 @@ contextBridge.exposeInMainWorld('folderVideo', {
     return () => ipcRenderer.removeListener('folder-video:transcript-progress', listener);
   },
   getAppInfo: () => ipcRenderer.invoke('folder-video:get-app-info'),
+  checkForUpdate: () => ipcRenderer.invoke('folder-video:check-update'),
+  getUpdateState: () => ipcRenderer.invoke('folder-video:get-update-state'),
+  onUpdateStatus: callback => {
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on('folder-video:update-status', listener);
+    return () => ipcRenderer.removeListener('folder-video:update-status', listener);
+  },
+  onPrepareUpdate: callback => {
+    const listener = async (_event, id) => {
+      let error = null;
+      try { await callback(); } catch (reason) { error = reason.message || String(reason); }
+      await ipcRenderer.invoke('folder-video:update-ready', id, error);
+    };
+    ipcRenderer.on('folder-video:update-prepare', listener);
+    return () => ipcRenderer.removeListener('folder-video:update-prepare', listener);
+  },
   getSettings: () => ipcRenderer.invoke('folder-video:get-settings'),
   getDefaultSettings: () => ipcRenderer.invoke('folder-video:get-default-settings'),
   saveSettings: settings => ipcRenderer.invoke('folder-video:save-settings', settings),
