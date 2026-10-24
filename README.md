@@ -43,6 +43,8 @@ To build the installer from source, use the instructions in the [technical docum
 
 ## Everyday use
 
+Settings use the same dark or light palette and purple accent as the rest of the app.
+
 1. Choose a folder or drop one into the window.
 2. Use the frame strips, filter, and sort controls to find a video.
 3. Open a video row. Adjust the number of frame-grid columns, the time interval, and automatic scrolling if needed.

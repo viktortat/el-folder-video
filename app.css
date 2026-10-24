@@ -303,16 +303,14 @@ body.light .youtube-candidate-button.is-primary:hover { background:#ffd9d5; colo
 
 /* Настройки: меню разделов и единая прокручиваемая страница. */
 .settings-view {
-  --ink:#efefe2; --muted:#a5a596; --line:#2e342a; --accent:#7fe0cc; --accent-2:#7fe0cc;
-  --settings-bg:#11150f; --settings-side:#151a12; --settings-panel:#1a1f17;
-  --settings-active:#3a2f55; --settings-input:#11150f; --settings-accent-ink:#062a24;
+  --settings-bg:var(--canvas); --settings-side:var(--panel); --settings-panel:var(--panel-2);
+  --settings-active:#2b2342; --settings-input:var(--canvas); --settings-accent-ink:#fff;
   height:100%; min-height:0; overflow:hidden; padding:0; color:var(--ink); background:var(--settings-bg);
   font-size:13px; line-height:1.5;
 }
 body.light .settings-view {
-  --ink:#1a1a1a; --muted:#6b6b5f; --line:#e3e3d0; --accent:#024f45; --accent-2:#024f45;
-  --settings-bg:#fffff0; --settings-side:#f6f6e2; --settings-panel:#fff;
-  --settings-active:#e8d9ff; --settings-input:#fff; --settings-accent-ink:#fff;
+  --settings-side:#f8fafc; --settings-panel:var(--panel);
+  --settings-active:#eee8ff; --settings-input:var(--panel);
   background:var(--settings-bg);
 }
 .settings-view .settings-layout { display:grid; grid-template-columns:224px minmax(0,1fr); width:100%; height:100%; min-height:0; margin:0; }
@@ -322,7 +320,7 @@ body.light .settings-view {
 .settings-nav a { display:flex; align-items:center; gap:11px; min-height:43px; padding:10px 12px; border-radius:8px; color:var(--ink); text-decoration:none; font-size:13px; line-height:1.4; transition:background .12s; }
 .settings-nav a svg { flex:none; opacity:.85; }
 .settings-nav a:hover { background:rgba(127,127,127,.1); }
-.settings-nav a[aria-current="location"] { background:var(--settings-active); color:var(--accent); font-weight:700; }
+.settings-nav a[aria-current="location"] { background:var(--settings-active); color:var(--accent-2); font-weight:700; }
 .settings-save-hint { margin:auto 12px 0; padding-top:32px; color:var(--muted); font-size:11px; line-height:1.65; }
 .settings-main { display:flex; flex-direction:column; min-width:0; min-height:0; }
 .settings-body { flex:1; min-width:0; min-height:0; overflow-y:auto; padding:30px 38px 32px; scrollbar-gutter:stable; }
@@ -360,7 +358,7 @@ label.settings-label { cursor:pointer; }
 .settings-view .settings-switch input:checked + span { background:var(--accent); }
 .settings-view .settings-switch input:checked + span::after { transform:translateX(18px); background:var(--settings-accent-ink); }
 .settings-view .settings-reset { flex:none; height:36px; padding:0 12px; border:1px solid var(--line); border-radius:6px; background:var(--settings-panel); color:var(--ink); font:12px Manrope,sans-serif; cursor:pointer; }
-.settings-view .settings-reset:hover { background:var(--settings-active); border-color:var(--accent); color:var(--accent); }
+.settings-view .settings-reset:hover { background:var(--settings-active); border-color:var(--accent); color:var(--accent-2); }
 .settings-view .settings-footer { flex:none; display:flex; align-items:center; gap:10px; min-height:74px; padding:15px 38px; border-top:1px solid var(--line); background:var(--settings-bg); }
 .settings-view .settings-footer > span { margin-right:auto; color:var(--muted); font:12px Manrope,sans-serif; }
 .settings-save { flex:none; min-height:36px; padding:0 16px; border:1px solid transparent; border-radius:6px; background:var(--accent); color:var(--settings-accent-ink); font:600 12px Manrope,sans-serif; cursor:pointer; }
@@ -373,7 +371,7 @@ label.settings-label { cursor:pointer; }
 .settings-view .cut-backup-meta { color:var(--muted); }
 .settings-view .settings-row .update-status { max-width:none; font-size:11px; }
 .settings-view .settings-row .update-status.error { color:#ff9ca9; }
-body.light .settings-view .settings-row .update-status.error { color:#a32424; }
+body.light .settings-view .settings-row .update-status.error { color:#b3263f; }
 .settings-view a:focus-visible, .settings-view button:focus-visible,
 .settings-view input:focus-visible, .settings-view select:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
 .settings-view .settings-switch input:focus-visible { outline:0; }
