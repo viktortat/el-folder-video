@@ -54,6 +54,9 @@ Folder-video сканирует `mp4`, `webm`, `mov`, `avi`, `mkv`, `m4v` и `og
 
 [Техническая документация](docs/README.md)
 
+Для разработчика: [сборка и публикация Windows-релиза](BUILDING-WINDOWS.md#выпустить-новую-версию) через `python scripts/release.py`; `--dry-run` проверяет сборку без публикации.
+Для очистки сборок и зависимостей выполните `bash clear.sh` в Git Bash; перед следующей сборкой выполните `bun install`.
+
 ## Лицензия
 
 MIT.
