@@ -240,7 +240,7 @@ async function installUpdate(release, updateExe) {
     if (updateWorkInProgress()) throw new Error('Дождитесь завершения обработки видео и повторите обновление.');
     await mkdir(app.getPath('userData'), { recursive: true });
     await rm(log, { force: true });
-    // Без cmd.exe: пути передаются литералами PowerShell, включая пробелы и апострофы.
+    // Пути передаются литералами PowerShell, включая пробелы и апострофы.
     // Помощник ждёт фактического выхода приложения, затем устанавливает и запускает его.
     const script = `$ErrorActionPreference = 'Stop'
 try {
@@ -254,8 +254,12 @@ try {
   Remove-Item -LiteralPath ${powershellLiteral(directory)} -Recurse -Force -ErrorAction SilentlyContinue
   Start-Process -FilePath ${powershellLiteral(updateExe)} -ArgumentList '--processStart', 'folder-video.exe' -WindowStyle Hidden
 }`;
+    // Как в Окошке: отдельный cmd.exe переживает выход Electron и запускает PowerShell.
+    // Напрямую detached-PowerShell может выйти до выполнения скрипта; без detached он зависит от родителя.
+    // cmd получает только фиксированную команду и base64, без пользовательских путей.
+    const command = `"powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}"`;
     await new Promise((resolve, reject) => {
-      const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { detached: true, stdio: 'ignore', windowsHide: true });
+      const child = spawn('cmd.exe', ['/d', '/s', '/c', command], { cwd: tempRoot, detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true });
       child.once('error', reject);
       child.once('spawn', () => { child.unref(); resolve(); });
     });

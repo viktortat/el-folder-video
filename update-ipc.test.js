@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const { readFileSync } = require('node:fs');
 const { EventEmitter } = require('node:events');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const path = require('node:path');
 const os = require('node:os');
@@ -200,10 +200,11 @@ test('IPC: успешное обновление проверяет загруз
   assert.equal(h.quit, true);
   assert.equal(h.launches.length, 1);
   const [executable, args, options] = h.launches[0];
-  assert.equal(executable, 'powershell.exe');
+  assert.equal(executable, 'cmd.exe');
   assert.equal(options.windowsHide, true);
-  assert.equal(options.detached, true);
-  const script = Buffer.from(args.at(-1), 'base64').toString('utf16le');
+  const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)"$/.exec(args.at(-1));
+  assert.ok(encoded);
+  const script = Buffer.from(encoded[1], 'base64').toString('utf16le');
   assert.ok(script.indexOf('Wait-Process') < script.indexOf('$installer = Start-Process'));
   assert.match(script, /--silent/);
   assert.match(script, /--processStart/);
@@ -229,7 +230,7 @@ test('IPC: ошибка запуска помощника не закрывае�
   assert.equal((await fs.readdir(h.root)).some(name => name.startsWith('folder-video-update-')), false);
 });
 
-test('помощник Windows: тихая установка, повторный запуск и сообщение при сбое установщика', { skip: process.platform !== 'win32' }, async t => {
+test('помощник Windows: установка и перезапуск после фактического выхода родителя, сообщение при сбое', { skip: process.platform !== 'win32' }, async t => {
   const compiler = await fs.mkdtemp(path.join(os.tmpdir(), 'fv-updater-stubs-'));
   t.after(() => fs.rm(compiler, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 }));
   const executable = path.join(compiler, 'stub.exe');
@@ -247,20 +248,39 @@ public class UpdateStub {
   execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(build, 'utf16le').toString('base64')], { windowsHide: true, timeout: 30000, stdio: 'pipe' });
   const bytes = await fs.readFile(executable);
   for (const fail of [false, true]) {
-    const h = await harness(t, { accept: true, parentPid: 2147483647, releases: [release('99.0.0', bytes)], download: bytes });
+    // Отдельный процесс запускает помощник и выходит точно так же, как Electron.
+    const parentSource = `const { spawn } = require('node:child_process');
+let input = '';
+process.stdin.on('data', chunk => { input += chunk; });
+process.stdin.on('end', () => {
+  const { command, args, options } = JSON.parse(input);
+  const child = spawn(command, args, options);
+  child.once('error', () => process.exit(1));
+  child.once('spawn', () => { child.unref(); process.exit(0); });
+});`;
+    const parent = spawn(process.execPath, ['-e', parentSource], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
+    t.after(() => { if (parent.exitCode === null) parent.kill(); });
+    const h = await harness(t, { accept: true, parentPid: parent.pid, releases: [release('99.0.0', bytes)], download: bytes });
     await h.check();
     assert.equal(h.launches.length, 1);
     await fs.mkdir(path.dirname(h.updateExe), { recursive: true });
     await fs.copyFile(executable, h.updateExe);
     const marker = path.join(h.root, 'calls.txt');
-    const [command, args] = h.launches[0];
-    execFileSync(command, args, { windowsHide: true, timeout: 30000, stdio: 'pipe',
-      env: { ...process.env, FV_UPDATE_TEST_LOG: marker, FV_UPDATE_TEST_FAIL: fail ? '1' : '0' } });
+    const [command, args, launchOptions] = h.launches[0];
+    // Важно использовать реальные options вызова, включая stdio и detached.
+    const completion = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => { parent.kill(); reject(new Error('Родитель не завершился')); }, 15000);
+      parent.once('error', error => { clearTimeout(timeout); reject(error); });
+      parent.once('exit', code => { clearTimeout(timeout); resolve(code); });
+    });
+    parent.stdin.end(JSON.stringify({ command, args, options: { ...launchOptions,
+      env: { ...process.env, FV_UPDATE_TEST_LOG: marker, FV_UPDATE_TEST_FAIL: fail ? '1' : '0' } } }));
+    assert.equal(await completion, 0);
     let calls = '';
-    for (let attempt = 0; attempt < 100; attempt++) {
+    for (let attempt = 0; attempt < 200; attempt++) {
       calls = await fs.readFile(marker, 'utf8').catch(() => '');
       if (calls.includes('--processStart')) break;
-      await new Promise(resolve => setTimeout(resolve, 30));
+      await new Promise(resolve => setTimeout(resolve, 50));
     }
     assert.deepEqual(calls.trim().split(/\r?\n/), ['--silent', '--processStart']);
     const error = await fs.readFile(path.join(h.paths.userData, 'update-error.txt'), 'utf8').catch(() => '');

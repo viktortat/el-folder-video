@@ -39,6 +39,8 @@ If the pinned Start menu tile shows a blank page after an update, unpin that til
 
 The installed Windows x64 app checks for updates ten seconds after launch. Settings → «Обновления» lets you disable startup checks or check manually. When a newer release is found, choose «Обновить» to download it, install it, and restart the app, or «Позже» to keep working. The download shows progress and is checked against the release size and GitHub's SHA-256 digest when provided. Finish video processing and save pending metadata or settings before updating; notes are saved before restart. Portable and development builds require a manual installer. Versions released before this feature need one manual update to gain the updater.
 
+If version 1.0.21 or 1.0.22 downloads an update and closes without installing it, run the installer for 1.0.23 or later manually once. These versions can exit before their Windows update helper executes its script; 1.0.23 fixes the helper launch.
+
 To build the installer from source, use the instructions in the [technical documentation](docs/README.md). The portable build is a folder at `out\\folder-video-win32-x64`; keep its files together and run `folder-video.exe` from that folder.
 
 ## Everyday use
