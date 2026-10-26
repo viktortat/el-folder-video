@@ -56,6 +56,51 @@
   let toastTimer;
   let resizeTimer;
   let updateStatus = { busy: false, message: "", error: false };
+  let restoringSession = true;
+  let lastSessionSave = 0;
+
+  function saveSession() {
+    if (restoringSession) return;
+    try {
+      localStorage.setItem("folder-video-session", JSON.stringify(window.SessionCore.snapshot(state)));
+      lastSessionSave = Date.now();
+    } catch (_) {}
+  }
+
+  async function restoreSession() {
+    var session;
+    try { session = window.SessionCore.parse(localStorage.getItem("folder-video-session")); } catch (_) { return; }
+    if (!session) return;
+    var unavailable = 0;
+    var tabs = await Promise.all(session.tabs.map(async function(saved) {
+      if (saved.type === "folder") return { id: "folder", type: "folder", label: "Видео" };
+      if (saved.type === "settings") return { id: "settings", type: "settings", draft: clone(state.settings), dirty: false };
+      try {
+        var video = await window.folderVideo.readVideo(saved.path);
+        if (video) {
+          var tab = createPlayerTab(video);
+          Object.keys(saved).forEach(function(key) { if (key !== "path") tab[key] = saved[key]; });
+          return tab;
+        }
+      } catch (_) {}
+      unavailable += 1;
+      return null;
+    }));
+    state.tabs = tabs.filter(Boolean);
+    state.activeTab = session.activeTab === null ? null : (state.tabs.some(function(tab) { return tab.id === session.activeTab; }) ? session.activeTab : (state.tabs[0] ? state.tabs[0].id : null));
+    state.folderPath = session.folderPath;
+    state.recursive = session.recursive;
+    if (state.folderPath) {
+      try {
+        var result = await window.folderVideo.scan(state.folderPath, state.recursive);
+        state.files = result.files; state.skipped = result.skipped;
+        await window.folderVideo.setTitle(state.folderPath);
+      } catch (_) { notice("Не удалось открыть сохранённую папку"); }
+    }
+    if (unavailable) notice("Недоступные видео пропущены: " + unavailable);
+  }
+
+  window.addEventListener("beforeunload", saveSession);
 
   function showUpdateStatus(status) {
     updateStatus = status;
@@ -314,7 +359,7 @@
   });
   document.addEventListener("keydown", function(event) { if (event.key === "Escape") { if (state.favoritesOpen) closeFavorites(); if (state.recentVideosOpen) closeRecentVideos(); closeCtxMenu(); } }); document.addEventListener("click", function() { closeCtxMenu(); });
   applyTheme("dark", false); updateFavoritesButton(); updateRecentVideosButton();
-  window.folderVideo.getSettings().then(function(result) {
+  const settingsReady = window.folderVideo.getSettings().then(function(result) {
     state.settings = result.settings;
     if (!result.hasConfig) {
       state.settings.theme = localStorage.getItem("folder-video-theme") || state.settings.theme;
@@ -564,7 +609,7 @@
     notice('Видео перемещено в корзину', true);
     render();
   }
-  function render() { renderTabs(); renderActiveView(); }
+  function render() { renderTabs(); renderActiveView(); saveSession(); }
   function renderTabs() {
     tabsEl.replaceChildren();
     for (var ti = 0; ti < state.tabs.length; ti++) {
@@ -864,6 +909,7 @@
   }
   window.folderVideo.onOpenTarget(async function(target) {
     if (!target || typeof target.path !== "string") return;
+    await startupReady;
     if (target.type === "folder") { await loadFolder(target.path); return; }
     if (target.type === "video") {
       if (typeof target.folderPath !== "string") return;
@@ -1071,8 +1117,11 @@
         state.activeTab = state.tabs[ti].id; render(); return;
       }
     }
-    var tab = { id: "player-" + Date.now() + "-" + Math.random().toString(16).slice(2), type: "player", label: video.name, video: video, columns: state.settings.viewer.columns, seconds: state.settings.viewer.seconds, scroll: state.settings.viewer.scroll, panelWidth: state.settings.viewer.panelWidth || 410, collapsed: state.gridCollapsed, metadataCollapsed: state.metadataCollapsed, panelMode: "frames", transcriptStatus: null, transcriptSegments: [], transcriptError: "", transcriptProgress: 0, summaryStatus: null, summaryData: null, summaryError: "", notesStatus: null, notesText: "", notesDirty: false, notesError: "", notesEditorCollapsed: true, noteEditStart: null, noteEditBlockIndex: null, currentTime: 0, metadataStatus: "idle", metadata: null, metadataDraft: null, metadataDirty: false, markdownMode: "edit" };
+    var tab = createPlayerTab(video);
     state.tabs.push(tab); state.activeTab = tab.id; render();
+  }
+  function createPlayerTab(video) {
+    return { id: "player-" + Date.now() + "-" + Math.random().toString(16).slice(2), type: "player", label: video.name, video: video, columns: state.settings.viewer.columns, seconds: state.settings.viewer.seconds, scroll: state.settings.viewer.scroll, panelWidth: state.settings.viewer.panelWidth || 410, collapsed: state.gridCollapsed, metadataCollapsed: state.metadataCollapsed, panelMode: "frames", transcriptStatus: null, transcriptSegments: [], transcriptError: "", transcriptProgress: 0, summaryStatus: null, summaryData: null, summaryError: "", notesStatus: null, notesText: "", notesDirty: false, notesError: "", notesEditorCollapsed: true, noteEditStart: null, noteEditBlockIndex: null, currentTime: 0, metadataStatus: "idle", metadata: null, metadataDraft: null, metadataDirty: false, markdownMode: "edit" };
   }
   async function closeTab(id) {
     var idx = -1;
@@ -1368,7 +1417,7 @@
     if (!tab.transcriptSegments || !tab.transcriptSegments.length) { host.innerHTML = "<p class=\"transcript-empty\">Транскрипции пока нет.<br>Нажмите кнопку транскрибации в шапке панели.</p>"; return; }
     host.innerHTML = tab.transcriptSegments.map(function(segment, index) { return "<button class=\"transcript-segment\" data-index=\"" + index + "\" data-start=\"" + segment.start + "\" data-end=\"" + segment.end + "\"><time>" + formatTime(segment.start) + "</time><span>" + escapeHtml(segment.text) + "</span></button>"; }).join("");
     host.querySelectorAll(".transcript-segment").forEach(function(button) { button.addEventListener("click", function() { player.currentTime = Number(button.dataset.start); tab.currentTime = player.currentTime; player.play().catch(function() {}); updateActiveTranscript(player.currentTime, tab, true); focusPlaybackControl(); }); });
-    updateActiveTranscript(player.currentTime, tab, false);
+    updateActiveTranscript(player.currentTime, tab, true);
   }
   async function loadPlayerTranscript(tab) {
     var filePath = tab.video.path;
@@ -1411,7 +1460,7 @@
     var host = $("#transcriptScroll"); if (!host) return;
     var next = index >= 0 ? host.querySelector(".transcript-segment[data-index=\"" + index + "\"]") : null;
     var previous = host.querySelector(".transcript-segment.active");
-    if (previous !== next) { if (previous) previous.classList.remove("active"); if (next) { next.classList.add("active"); if (shouldScroll) next.scrollIntoView({ block: "nearest" }); } }
+    if (previous !== next) { if (previous) previous.classList.remove("active"); if (next) { next.classList.add("active"); if (shouldScroll) next.scrollIntoView({ block: "center" }); } }
   }
   function setPlayerPanelMode(tab, player) {
     var mode = tab.panelMode || "frames"; var frames = $("#gridScroll"); var transcript = $("#transcriptScroll"); var summary = $("#summaryScroll"); var notes = $("#notesScroll"); var controls = $("#frameControls");
@@ -1618,8 +1667,8 @@
       if (!Number.isFinite(player.duration) || !player.duration) { notice("Этот файл не удаётся декодировать в Chromium."); return; }
       renderFrameGrid(tab, player);
     });
-    player.addEventListener("timeupdate", function() { tab.currentTime = player.currentTime; updateActiveFrame(player.currentTime, tab, !tab.isDragging); updateActiveTranscript(player.currentTime, tab, true); refreshVideoNote(tab, player, true); });
-    player.addEventListener("seeked", function() { tab.currentTime = player.currentTime; updateActiveFrame(player.currentTime, tab, !tab.isDragging); updateActiveTranscript(player.currentTime, tab, true); refreshVideoNote(tab, player, false); });
+    player.addEventListener("timeupdate", function() { tab.currentTime = player.currentTime; updateActiveFrame(player.currentTime, tab, !tab.isDragging); updateActiveTranscript(player.currentTime, tab, true); refreshVideoNote(tab, player, true); if (Date.now() - lastSessionSave >= 1000) saveSession(); });
+    player.addEventListener("seeked", function() { tab.currentTime = player.currentTime; updateActiveFrame(player.currentTime, tab, !tab.isDragging); updateActiveTranscript(player.currentTime, tab, true); refreshVideoNote(tab, player, false); saveSession(); });
     document.onkeydown = function(event) { keyboardPlayer(event, tab, player); };
     player.addEventListener("loadedmetadata", function() { renderCutBar(tab, player); });
     ["timeupdate", "seeked"].forEach(function(name) { player.addEventListener(name, function() { updateCutPlayhead(tab, player); }); });
@@ -2242,5 +2291,6 @@
     else video.currentTime = target;
   }); }
 
+  const startupReady = settingsReady.then(restoreSession).catch(function() { notice("Не удалось восстановить вкладки"); }).finally(function() { restoringSession = false; render(); });
   render();
 })();
