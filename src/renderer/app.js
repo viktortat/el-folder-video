@@ -677,7 +677,7 @@
     for (var ti = 0; ti < state.tabs.length; ti++) {
       var tab = state.tabs[ti];
       var button = document.createElement("button");
-      button.className = "tab" + (tab.id === state.activeTab ? " active" : "");
+      button.className = "tab" + (tab.type === "folder" ? " tab-pinned" : "") + (tab.id === state.activeTab ? " active" : "");
       var tabName = tabTitle(tab);
       button.title = tabName;
       button.innerHTML = "<span class=\"tab-dot\"></span><span class=\"tab-name\">" + escapeHtml(tabName) + "</span><span class=\"close-tab\" title=\"Закрыть вкладку\">×</span>";
@@ -697,7 +697,8 @@
     var activeButton = tabsEl.querySelector(".tab.active");
     if (activeButton) {
       var tabRect = activeButton.getBoundingClientRect(), stripRect = tabsEl.getBoundingClientRect();
-      if (tabRect.left < stripRect.left) tabsEl.scrollLeft += tabRect.left - stripRect.left;
+      var pinned = tabsEl.querySelector(".tab-pinned"), pinnedWidth = pinned && pinned !== activeButton ? pinned.offsetWidth + 3 : 0;
+      if (tabRect.left < stripRect.left + pinnedWidth) tabsEl.scrollLeft += tabRect.left - stripRect.left - pinnedWidth;
       else if (tabRect.right > stripRect.right) tabsEl.scrollLeft += tabRect.right - stripRect.right;
     }
     updateTabsOverflow();
