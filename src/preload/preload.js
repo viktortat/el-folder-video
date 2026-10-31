@@ -26,7 +26,7 @@ contextBridge.exposeInMainWorld('folderVideo', {
   copyPath: filePath => ipcRenderer.invoke('folder-video:copy-path', filePath),
   copyImage: imageData => ipcRenderer.invoke('folder-video:copy-image', imageData),
   deleteFile: filePath => ipcRenderer.invoke('folder-video:delete-file', filePath),
-  moveFile: filePath => ipcRenderer.invoke('folder-video:move-file', filePath),
+  moveFile: (filePath, targetDir) => ipcRenderer.invoke('folder-video:move-file', filePath, targetDir),
   speedUp: (filePath, operationId, durationSeconds) => ipcRenderer.invoke('folder-video:speed-up', filePath, operationId, durationSeconds),
   onSpeedUpProgress: callback => {
     const listener = (_event, progress) => callback(progress);

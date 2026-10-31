@@ -38,6 +38,7 @@
     stripCache: new Map(), stripPending: new Map(), frameCache: new Map(), favoriteThumbnailCache: new Map(), durationCache: new Map(), youtubeSourceCache: new Map(), youtubeBusy: new Set(), captureVideos: new Map(), task: 0, thumbnailGeneration: 0, thumbnailPriority: 0,
     recentFolders: JSON.parse(localStorage.getItem("folder-video-recent") || "[]"),
     pinnedFolders: JSON.parse(localStorage.getItem("folder-video-pinned") || "[]"),
+    recentMoveFolders: (function() { try { var list = JSON.parse(localStorage.getItem("folder-video-recent-move-folders") || "[]"); return Array.isArray(list) ? list.filter(function(item) { return typeof item === "string" && item; }).slice(0, 5) : []; } catch (_) { return []; } })(),
     favorites: JSON.parse(localStorage.getItem("folder-video-favorites") || "[]"), favoritesOpen: false, favoritesOnly: false, favoritesFolderOnly: false,
     recentVideos: JSON.parse(localStorage.getItem("folder-video-recent-videos") || "[]"), recentThumbnailCache: new Map(), recentVideosOpen: false,
     speedUp: null, transcript: null,
@@ -485,11 +486,30 @@
     var playerActions = playerTab && player
       ? '<button data-action="screenshot">Сделать скриншот текущего кадра</button><button data-action="go-to-video">Перейти на видео</button>'
       : '';
-    menu.innerHTML = playerActions + '<button data-action="copy-name">Скопировать название без расширения</button><button data-action="copy">Скопировать полный путь к файлу</button><button data-action="shortcut">Сделать ссылку на файл в папке</button><div class="sep"></div><button data-action="move">Перенести в другую папку</button><button class="danger" data-action="delete">Удалить видео</button>';
+    var recentMoves = state.recentMoveFolders.map(function(dir) {
+      var label = dir.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || dir;
+      return '<button data-action="move-to" data-dir="' + escapeHtml(dir) + '" title="' + escapeHtml(dir) + '" aria-label="Перенести в ' + escapeHtml(dir) + '">' + escapeHtml(label) + '</button>';
+    }).join('');
+    var moveItem = recentMoves
+      ? '<div class="ctx-sub-wrap"><button data-action="move" aria-haspopup="true" class="has-sub">Перенести в другую папку</button><div class="ctx-submenu" role="menu" aria-label="Последние папки">' + recentMoves + '</div></div>'
+      : '<button data-action="move">Перенести в другую папку</button>';
+    menu.innerHTML = playerActions + '<button data-action="copy-name">Скопировать название без расширения</button><button data-action="copy">Скопировать полный путь к файлу</button><button data-action="shortcut">Сделать ссылку на файл в папке</button><div class="sep"></div>' + moveItem + '<button class="danger" data-action="delete">Удалить видео</button>';
+    menu.querySelectorAll('.ctx-sub-wrap').forEach(function(wrap) {
+      wrap.addEventListener('mouseenter', function() {
+        var sub = wrap.querySelector('.ctx-submenu');
+        sub.classList.remove('flip-left', 'flip-up');
+        var wr = wrap.getBoundingClientRect();
+        var sr = sub.getBoundingClientRect();
+        if (wr.right + sr.width > window.innerWidth) sub.classList.add('flip-left');
+        if (wr.top + sr.height > window.innerHeight) sub.classList.add('flip-up');
+      });
+    });
     menu.querySelectorAll('button').forEach(function(btn) {
       btn.addEventListener('click', function() {
         closeCtxMenu();
-        if (btn.dataset.action === 'screenshot' && playerTab && player) {
+        if (btn.dataset.action === 'move-to') {
+          moveFile(filePath, btn.dataset.dir);
+        } else if (btn.dataset.action === 'screenshot' && playerTab && player) {
           takeVideoScreenshot(playerTab, player);
         } else if (btn.dataset.action === 'copy-name') {
           copyVideoNameByPath(filePath);
@@ -543,16 +563,23 @@
     await loadFolder(folderPath, true);
     focusVideoRow(filePath);
   }
-  async function moveFile(filePath) {
+  function rememberMoveFolder(destPath) {
+    var dir = String(destPath || '').replace(/[\\/][^\\/]*$/, '');
+    if (!dir) return;
+    state.recentMoveFolders = [dir].concat(state.recentMoveFolders.filter(function(item) { return item !== dir; })).slice(0, 5);
+    try { localStorage.setItem("folder-video-recent-move-folders", JSON.stringify(state.recentMoveFolders)); } catch (_) {}
+  }
+  async function moveFile(filePath, targetDir) {
     var playerTab = active();
     var replacement = playerTab && playerTab.type === 'player' && playerTab.video.path === filePath
       ? adjacentPlayerVideo(playerTab, 1) || adjacentPlayerVideo(playerTab, -1)
       : null;
     await Promise.all(state.tabs.filter(function(tab) { return tab.type === "player" && tab.video.path === filePath; }).map(flushPlayerNotes));
-    var result = await window.folderVideo.moveFile(filePath);
+    var result = await window.folderVideo.moveFile(filePath, targetDir);
     if (!result) return;
     if (result.canceled) return;
     if (result.error) { notice('Ошибка: ' + result.error); return; }
+    if (result.dest) rememberMoveFolder(result.dest);
     if (result.unchanged) { notice('Файл уже находится в выбранной папке', true); return; }
     if (result.sourceDeleted) {
       state.files = state.files.filter(function(file) { return file.path !== filePath; });

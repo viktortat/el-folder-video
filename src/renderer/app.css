@@ -98,6 +98,14 @@ body.light .video-switcher .toggle-playback:hover:not(:disabled),body.light .vid
 .ctx-menu button.danger { color:#ff9bb8; }
 .ctx-menu button.danger:hover { background:#3b202b; color:#ffd7e3; }
 .ctx-menu .sep { height:1px; background:#2c333e; margin:4px 0 3px; }
+.ctx-sub-wrap { position:relative; }
+.ctx-menu button.has-sub::after { content:"›"; float:right; margin-left:12px; }
+.ctx-submenu { display:none; position:absolute; left:100%; top:-5px; min-width:180px; max-width:320px; margin-left:2px; border:1px solid #3c4655; border-radius:8px; background:#171b21; box-shadow:0 12px 40px rgba(0,0,0,.5); padding:4px; }
+.ctx-submenu.flip-left { left:auto; right:100%; margin-left:0; margin-right:2px; }
+.ctx-submenu.flip-up { top:auto; bottom:-5px; }
+.ctx-sub-wrap:hover > .ctx-submenu, .ctx-sub-wrap:focus-within > .ctx-submenu { display:block; }
+.ctx-submenu button { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+body.light .ctx-submenu { background:#fff; border-color:#cfd7e3; }
 body.light .ctx-menu { background:#fff; border-color:#cfd7e3; }
 body.light .ctx-menu button:hover { background:#edf1f7; }
 body.light .ctx-menu button.danger { color:#b93362; }

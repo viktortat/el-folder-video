@@ -1,5 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain, shell, nativeImage, Menu, clipboard, safeStorage, net } = require('electron');
-const { readdir, lstat, rename, copyFile, unlink, readFile, writeFile, mkdir, rm, mkdtemp } = require('node:fs/promises');
+const { readdir, lstat, stat, rename, copyFile, unlink, readFile, writeFile, mkdir, rm, mkdtemp } = require('node:fs/promises');
 const { createWriteStream } = require('node:fs');
 const { Readable, Transform } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
@@ -1082,14 +1082,25 @@ ipcMain.handle('folder-video:delete-file', async (event, filePath) => {
   }
 });
 
-ipcMain.handle('folder-video:move-file', async (event, sourcePath) => {
+ipcMain.handle('folder-video:move-file', async (event, sourcePath, targetDir) => {
   if (typeof sourcePath !== 'string') return { error: 'Invalid path' };
-  const result = await dialog.showOpenDialog({
-    title: 'Выберите папку для перемещения',
-    properties: ['openDirectory']
-  });
-  if (result.canceled) return { canceled: true };
-  const dest = path.join(result.filePaths[0], path.basename(sourcePath));
+  let destDir;
+  if (typeof targetDir === 'string' && targetDir) {
+    try {
+      if (!(await stat(targetDir)).isDirectory()) return { error: 'Папка назначения недоступна' };
+    } catch (error) {
+      return { error: 'Папка назначения недоступна' };
+    }
+    destDir = targetDir;
+  } else {
+    const result = await dialog.showOpenDialog({
+      title: 'Выберите папку для перемещения',
+      properties: ['openDirectory']
+    });
+    if (result.canceled) return { canceled: true };
+    destDir = result.filePaths[0];
+  }
+  const dest = path.join(destDir, path.basename(sourcePath));
 
   let sourceInfo;
   try {
