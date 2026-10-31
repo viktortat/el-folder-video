@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# ./scripts/start.sh — запуск Folder-video в режиме разработки (electron-forge start).
+# ./start.sh — запуск Folder-video в режиме разработки (electron-forge start).
 set -euo pipefail
 
-cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")"
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) ;;
     *) echo 'Скрипт рассчитан на Git Bash в Windows.' >&2; exit 1 ;;
@@ -45,7 +45,7 @@ try {
             throw "Некорректный файл состояния: $stateFile"
         }
         if (@($saved.processes | Where-Object { Test-Saved $_ }).Count -gt 0) {
-            Write-Output 'Folder-video уже запущен. Остановить: ./scripts/stop.sh'
+            Write-Output 'Folder-video уже запущен. Остановить: ./stop.sh'
             exit 0
         }
         Remove-Item -LiteralPath $stateFile

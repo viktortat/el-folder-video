@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# ./scripts/stop.sh — остановка Folder-video, запущенного через scripts/start.sh.
+# ./stop.sh — остановка Folder-video, запущенного через start.sh.
 set -euo pipefail
 
-cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")"
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) ;;
     *) echo 'Скрипт рассчитан на Git Bash в Windows.' >&2; exit 1 ;;
@@ -11,7 +11,7 @@ esac
 for option in "$@"; do
     case "$option" in
         -h|--help)
-            echo './scripts/stop.sh   остановить Folder-video, запущенный start.sh (вместе с дочерними процессами)'
+            echo './stop.sh   остановить Folder-video, запущенный start.sh (вместе с дочерними процессами)'
             exit 0 ;;
         *) echo "Неизвестный параметр: $option" >&2; exit 2 ;;
     esac

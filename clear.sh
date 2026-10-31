@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# ./scripts/clear.sh
+# ./clear.sh
 set -euo pipefail
 
 usage() {
     cat <<'HELP'
 Очистка проекта Folder-video (Git Bash, Windows).
 
-  ./scripts/clear.sh             удалить кэши, зависимости и результаты сборки
-  ./scripts/clear.sh --dry-run   показать папки без удаления
+  ./clear.sh             удалить кэши, зависимости и результаты сборки
+  ./clear.sh --dry-run   показать папки без удаления
 
 Исходники, .git и bun.lock сохраняются.
 После очистки start.sh заново установит зависимости (bun install).
@@ -28,7 +28,7 @@ case "$(uname -s)" in
     *) echo 'Скрипт рассчитан на Git Bash в Windows.' >&2; exit 1 ;;
 esac
 
-cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")"
 export FV_CLEAR_ROOT="$(pwd -W)"
 export FV_CLEAR_DRY_RUN="$dry_run"
 
@@ -76,7 +76,7 @@ try {
                 }
                 $process = Get-Process -Id $entry.pid -ErrorAction SilentlyContinue
                 if ($process -and [string]$process.StartTime.ToUniversalTime().Ticks -eq [string]$entry.created) {
-                    throw 'Приложение запущено. Выполните ./scripts/stop.sh перед очисткой.'
+                    throw 'Приложение запущено. Выполните ./stop.sh перед очисткой.'
                 }
             }
         }
@@ -122,5 +122,5 @@ POWERSHELL
 )"
 
 if [[ $dry_run -eq 0 ]]; then
-    echo 'Для запуска: ./scripts/start.sh'
+    echo 'Для запуска: ./start.sh'
 fi

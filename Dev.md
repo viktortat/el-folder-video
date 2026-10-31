@@ -7,7 +7,7 @@ bunx --no-install electron-forge make
 start 'out\make\squirrel.windows\x64\folder-video-setup.exe'
 bun run start
 
-# ./scripts/clear.sh
+# ./clear.sh
 uv run scripts/release.py 
 ```
 

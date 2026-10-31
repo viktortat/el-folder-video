@@ -848,7 +848,7 @@
   }
 
   function emptyHomeMarkup() {
-    return "<div class=\"empty\"><div class=\"empty-inner home-panel\"><div class=\"empty-icon\"><img src=\"assets/folder-video.png\" alt=\"\" /></div><p class=\"home-kicker\">Folder-video</p><strong>Быстрый обзор больших видеопапок без импорта и лишней суеты</strong><small>Локальный видеобраузер с покадровой сеткой, точным переходом по таймлайну и удобным отбором роликов прямо из папки.</small><div class=\"home-points\"><span>Кадры по всей длине видео</span><span>Мгновенный переход к сцене</span><span>Файлы остаются локально</span></div><p class=\"home-formats\">" + supported + "</p></div></div>";
+    return "<div class=\"empty\"><div class=\"empty-inner home-panel\"><div class=\"empty-icon\"><img src=\"../../assets/folder-video.png\" alt=\"\" /></div><p class=\"home-kicker\">Folder-video</p><strong>Быстрый обзор больших видеопапок без импорта и лишней суеты</strong><small>Локальный видеобраузер с покадровой сеткой, точным переходом по таймлайну и удобным отбором роликов прямо из папки.</small><div class=\"home-points\"><span>Кадры по всей длине видео</span><span>Мгновенный переход к сцене</span><span>Файлы остаются локально</span></div><p class=\"home-formats\">" + supported + "</p></div></div>";
   }
 
   function recentFoldersMarkup() {
@@ -857,7 +857,7 @@
       var label = pinned ? "Открепить папку" : "Закрепить папку";
       return "<div class=\"recent-folder\"><button class=\"recent-open\" data-folder=\"" + escapeHtml(f) + "\" title=\"" + escapeHtml(f) + "\"><span class=\"recent-icon\">▸</span><span>" + escapeHtml(f) + "</span></button><button class=\"recent-pin" + (pinned ? " is-pinned" : "") + "\" data-folder=\"" + escapeHtml(f) + "\" title=\"" + label + "\" aria-label=\"" + label + "\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 17v5M9 3h6l1 7 3 3H5l3-3 1-7Z\"/></svg></button></div>";
     }).join("");
-    return "<div class=\"empty\"><div class=\"empty-inner home-panel\"><div class=\"empty-icon\"><img src=\"assets/folder-video.png\" alt=\"\" /></div><p class=\"home-kicker\">Folder-video</p><strong>Вернитесь к папке и найдите нужный момент глазами</strong><small>Миниатюры по всей длине ролика превращают папку с видео в карту сцен: меньше перемотки, больше точных решений.</small><div class=\"home-recents\"><span>Последние папки</span><div class=\"recent-folder-grid\">" + items + "</div></div></div></div>";
+    return "<div class=\"empty\"><div class=\"empty-inner home-panel\"><div class=\"empty-icon\"><img src=\"../../assets/folder-video.png\" alt=\"\" /></div><p class=\"home-kicker\">Folder-video</p><strong>Вернитесь к папке и найдите нужный момент глазами</strong><small>Миниатюры по всей длине ролика превращают папку с видео в карту сцен: меньше перемотки, больше точных решений.</small><div class=\"home-recents\"><span>Последние папки</span><div class=\"recent-folder-grid\">" + items + "</div></div></div></div>";
   }
 
   function renderFolder() {
@@ -936,7 +936,7 @@
   function emptyMarkup() {
     if (!state.folderPath) return visibleRecentFolders().length ? recentFoldersMarkup() : emptyHomeMarkup();
     var message = state.filterText || state.favoritesOnly || state.hideEmptyFiles || state.recentDaysEnabled ? "По фильтру ничего не найдено" : "Видео не найдены";
-    return "<div class=\"empty\"><div class=\"empty-inner\"><div class=\"empty-icon\"><img src=\"assets/folder-video.png\" alt=\"\" /></div><strong>" + message + "</strong><small>Измените фильтр или выберите другую папку<br>" + supported + "</small></div></div>";
+    return "<div class=\"empty\"><div class=\"empty-inner\"><div class=\"empty-icon\"><img src=\"../../assets/folder-video.png\" alt=\"\" /></div><strong>" + message + "</strong><small>Измените фильтр или выберите другую папку<br>" + supported + "</small></div></div>";
   }
   function rowMarkup(video) {
     var cells = "";

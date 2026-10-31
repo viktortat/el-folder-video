@@ -65,7 +65,7 @@ The full feature set targets Windows 10 and Windows 11. Windows Explorer integra
 [Technical documentation](docs/README.md)
 
 Maintainers: [build and publish a Windows release](docs/BUILDING-WINDOWS.md#выпустить-новую-версию) with `python scripts/release.py`; use `--dry-run` to build without publishing.
-Run `bash scripts/clear.sh` in Git Bash to remove build output and dependencies; run `bun install` before building again.
+Run `bash clear.sh` in Git Bash to remove build output and dependencies; run `bun install` before building again.
 
 ## License
 
