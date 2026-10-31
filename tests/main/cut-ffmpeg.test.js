@@ -4,7 +4,7 @@ const { spawnSync } = require('node:child_process');
 const { mkdtemp, readdir, rm, stat } = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { runFfmpeg, probeDuration, listKeyframes, planCut, executeCut } = require('./cut-ffmpeg');
+const { runFfmpeg, probeDuration, listKeyframes, planCut, executeCut } = require('../../src/main/cut-ffmpeg');
 
 const hasFfmpeg = ['ffmpeg', 'ffprobe'].every(command => spawnSync(command, ['-version'], { windowsHide: true }).status === 0);
 const options = { skip: hasFfmpeg ? false : 'ffmpeg/ffprobe не найдены в PATH' };

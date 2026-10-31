@@ -5,7 +5,7 @@ module.exports = {
     icon: './assets/folder-video.ico',
     ignore: [
       /^\/\.bun-tmp(?:\/|$)/,
-      /(thumbnail-queue|summary-core|notes-core|session-core|cut-core|cut-ffmpeg|cut-undo|move-file-conflict|video-metadata-store|waveform-core|author-url-property|update-core|update-ipc)\.test\.js$/
+      /^\/tests(?:\/|$)/
     ],
     extraResource: [
       'scripts/transcribe_handy.py',

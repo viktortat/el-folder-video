@@ -5,7 +5,7 @@ const { readFileSync } = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { readAuthorUrl, writeAuthorUrl } = require('./author-url-property');
+const { readAuthorUrl, writeAuthorUrl } = require('../../src/main/author-url-property');
 
 function windowsProperty(file, mode, url = '') {
   // Независимый эталон: Windows разрешает каноническое имя, без номера свойства из приложения.
@@ -61,7 +61,7 @@ $item = $folder.ParseName($file.Name)
 }
 
 function batchProperty(mode, file, url = '') {
-  const source = readFileSync(path.join(__dirname, 'scripts', 'set_youtube_source.py'), 'utf8');
+  const source = readFileSync(path.join(__dirname, '..', '..', 'scripts', 'set_youtube_source.py'), 'utf8');
   const match = /POWERSHELL = r'''([\s\S]*?)'''/.exec(source);
   assert.ok(match, 'PowerShell-код пакетного скрипта найден');
   const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(match[1], 'utf16le').toString('base64')], {

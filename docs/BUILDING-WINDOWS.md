@@ -26,7 +26,7 @@ Test-Path '.\out\make\squirrel.windows\x64\folder-video-setup.exe'
 
 ## Выпустить новую версию
 
-Скрипт [scripts/release.py](scripts/release.py) работает на Windows x64 с Python
+Скрипт [scripts/release.py](../scripts/release.py) работает на Windows x64 с Python
 3.11+ и установленными зависимостями проекта. Для публикации нужны `git`, `bun`
 и GitHub CLI (`gh`) в `PATH`, вход через `gh auth login` и право записи в основной
 репозиторий и `viktortat/utils-releases`. Если приложение запущено из `out`,
@@ -142,7 +142,7 @@ PowerShell с `detached: true` в проверенном сценарии зав
 
 ## Очистить сборки и зависимости
 
-Из Git Bash выполните `./clear.sh` или `bash clear.sh`. Скрипт удаляет
+Из Git Bash выполните `./scripts/clear.sh` или `bash scripts/clear.sh`. Скрипт удаляет
 `node_modules`, `out`, `out-*`, `dist`, `dist-electron` и `.bun-tmp` рядом с собой,
 независимо от текущей папки терминала. Символические ссылки удаляются без обхода
 их содержимого. Перед очисткой закройте приложение, запущенное из `out`.

@@ -47,6 +47,8 @@
   const $ = selector => document.querySelector(selector);
   const view = $("#view");
   const tabsEl = $("#tabs");
+  const tabbarEl = $(".tabbar");
+  const tabsListButton = $("#tabsListButton");
   const toastEl = $("#toast");
   const themeToggle = $("#themeToggle");
   const favoritesButton = $("#favoritesButton");
@@ -351,6 +353,65 @@
     state.activeTab = null;
     render();
   });
+  function updateTabsOverflow() {
+    tabbarEl.classList.toggle("tabs-overflow", tabsEl.scrollWidth - tabsEl.clientWidth > 1);
+  }
+  function tabTitle(tab) { return tab.type === "folder" ? "ВИДЕО" : tab.type === "settings" ? "НАСТРОЙКИ" : tab.video.name; }
+  function activateTab(tid) {
+    var previous = active(); if (previous && previous.type === "player" && previous.id !== tid) flushPlayerNotes(previous);
+    state.activeTab = tid; render();
+  }
+  function cycleTab(step) {
+    if (!state.tabs.length) return;
+    var idx = state.tabs.findIndex(function(tab) { return tab.id === state.activeTab; });
+    var next = idx < 0 ? (step > 0 ? 0 : state.tabs.length - 1) : (idx + step + state.tabs.length) % state.tabs.length;
+    activateTab(state.tabs[next].id);
+  }
+  function showTabsList() {
+    var wasOpen = ctxMenu && ctxMenu.classList.contains("tabs-list-menu");
+    closeCtxMenu();
+    if (wasOpen) return;
+    var menu = document.createElement("div");
+    menu.className = "ctx-menu tabs-list-menu";
+    menu.setAttribute("role", "menu");
+    state.tabs.forEach(function(tab) {
+      var row = document.createElement("div");
+      row.className = "tabs-list-item" + (tab.id === state.activeTab ? " active" : "");
+      row.innerHTML = "<button class=\"tabs-list-open\" type=\"button\" role=\"menuitem\"></button><button class=\"tabs-list-close\" type=\"button\" title=\"Закрыть вкладку\" aria-label=\"Закрыть вкладку\">×</button>";
+      var open = row.querySelector(".tabs-list-open");
+      open.textContent = tabTitle(tab); open.title = tabTitle(tab);
+      open.addEventListener("click", function() { closeCtxMenu(); activateTab(tab.id); });
+      row.querySelector(".tabs-list-close").addEventListener("click", function(event) { event.stopPropagation(); closeCtxMenu(); closeTab(tab.id); });
+      menu.appendChild(row);
+    });
+    menu.addEventListener("click", function(event) { event.stopPropagation(); });
+    var rect = tabsListButton.getBoundingClientRect();
+    menu.style.top = (rect.bottom + 4) + "px";
+    menu.style.right = Math.max(4, window.innerWidth - rect.right) + "px";
+    document.body.appendChild(menu);
+    ctxMenu = menu;
+    tabsListButton.setAttribute("aria-expanded", "true");
+    var activeRow = menu.querySelector(".tabs-list-item.active");
+    if (activeRow) activeRow.scrollIntoView({ block: "nearest" });
+  }
+  tabsListButton.addEventListener("click", function(event) { event.stopPropagation(); showTabsList(); });
+  document.addEventListener("keydown", function(event) {
+    if (!event.ctrlKey || event.altKey || event.metaKey) return;
+    var step = event.key === "Tab" ? (event.shiftKey ? -1 : 1) : event.key === "PageDown" ? 1 : event.key === "PageUp" ? -1 : 0;
+    if (!step) return;
+    event.preventDefault();
+    closeCtxMenu();
+    cycleTab(step);
+  });
+  tabsEl.addEventListener("wheel", function(event) {
+    if (tabsEl.scrollWidth <= tabsEl.clientWidth) return;
+    var delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    if (!delta) return;
+    event.preventDefault();
+    tabsEl.scrollLeft += delta;
+  }, { passive: false });
+  if (window.ResizeObserver) new ResizeObserver(updateTabsOverflow).observe(tabsEl);
+  else window.addEventListener("resize", updateTabsOverflow);
   window.folderVideo.onTranscriptProgress(function(progress) {
     if (!state.transcript || progress.operationId !== state.transcript.operationId) return;
     state.transcript.progress = progress.percent;
@@ -414,7 +475,7 @@
 
   /* context menu */
   var ctxMenu = null;
-  function closeCtxMenu() { if (ctxMenu) { ctxMenu.remove(); ctxMenu = null; } }
+  function closeCtxMenu() { if (ctxMenu) { ctxMenu.remove(); ctxMenu = null; } tabsListButton.removeAttribute("aria-expanded"); }
   function showCtxMenu(event, filePath, playerTab, player) {
     closeCtxMenu();
     var menu = document.createElement('div');
@@ -611,22 +672,35 @@
   }
   function render() { renderTabs(); renderActiveView(); saveSession(); }
   function renderTabs() {
+    var tabsScroll = tabsEl.scrollLeft;
     tabsEl.replaceChildren();
     for (var ti = 0; ti < state.tabs.length; ti++) {
       var tab = state.tabs[ti];
       var button = document.createElement("button");
       button.className = "tab" + (tab.id === state.activeTab ? " active" : "");
-      var tabName = tab.type === "folder" ? "ВИДЕО" : tab.type === "settings" ? "НАСТРОЙКИ" : tab.video.name;
+      var tabName = tabTitle(tab);
+      button.title = tabName;
       button.innerHTML = "<span class=\"tab-dot\"></span><span class=\"tab-name\">" + escapeHtml(tabName) + "</span><span class=\"close-tab\" title=\"Закрыть вкладку\">×</span>";
       button.addEventListener("click", function(tid) {
         return function(event) {
           if (event.target.closest(".close-tab")) return closeTab(tid);
-          var previous = active(); if (previous && previous.type === "player" && previous.id !== tid) flushPlayerNotes(previous);
-          state.activeTab = tid; render();
+          activateTab(tid);
         };
       }(tab.id));
+      button.addEventListener("auxclick", function(tid) {
+        return function(event) { if (event.button === 1) { event.preventDefault(); closeTab(tid); } };
+      }(tab.id));
+      button.addEventListener("mousedown", function(event) { if (event.button === 1) event.preventDefault(); });
       tabsEl.appendChild(button);
     }
+    tabsEl.scrollLeft = tabsScroll;
+    var activeButton = tabsEl.querySelector(".tab.active");
+    if (activeButton) {
+      var tabRect = activeButton.getBoundingClientRect(), stripRect = tabsEl.getBoundingClientRect();
+      if (tabRect.left < stripRect.left) tabsEl.scrollLeft += tabRect.left - stripRect.left;
+      else if (tabRect.right > stripRect.right) tabsEl.scrollLeft += tabRect.right - stripRect.right;
+    }
+    updateTabsOverflow();
   }
 
   function renderActiveView() {

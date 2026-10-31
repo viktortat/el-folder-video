@@ -15,17 +15,18 @@
         <button id="settingsButton" class="settings-button" type="button" title="Открыть настройки" aria-label="Открыть настройки">⚙</button>
         <button id="homeButton" class="tabbar-home" type="button" title="Главная страница" aria-label="Главная страница"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg></button>
         <div id="tabs" class="tabs"></div>
+        <button id="tabsListButton" class="tabs-list-button" type="button" title="Открытые вкладки (Ctrl+Tab — следующая)" aria-label="Список открытых вкладок" aria-haspopup="menu">⋯</button>
         <div class="tabbar-mark">FV / LOCAL</div>
       </header>
       <section id="view" class="view"></section>
       <footer class="app-version-bar"><span id="updateActivity" role="status" aria-live="polite"></span><span id="appVersion"></span></footer>
       <div id="toast" class="toast" role="status"></div>
     </main>
-    <script src="thumbnail-queue.js?v=home-icon-1"></script>
-    <script src="notes-core.js?v=notes-1"></script>
-    <script src="session-core.js?v=session-1"></script>
-    <script src="cut-core.js?v=cut-1"></script>
-    <script src="waveform-core.js?v=wave-1"></script>
+    <script src="lib/thumbnail-queue.js?v=home-icon-1"></script>
+    <script src="../shared/notes-core.js?v=notes-1"></script>
+    <script src="lib/session-core.js?v=session-1"></script>
+    <script src="../shared/cut-core.js?v=cut-1"></script>
+    <script src="../shared/waveform-core.js?v=wave-1"></script>
     <script src="app.js?v=home-icon-1"></script>
   </body>
 </html>

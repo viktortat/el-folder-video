@@ -13,7 +13,7 @@ Folder-video - Electron-приложение для просмотра лока�
 - Windows 10 или 11 для полного набора функций и Windows-сборки.
 - FFmpeg в `PATH`, только если нужна команда ускорения ролика.
 
-macOS-сборка описана в [BUILDING-MACOS.md](../BUILDING-MACOS.md).
+macOS-сборка описана в [BUILDING-MACOS.md](BUILDING-MACOS.md).
 
 ## Установка и запуск из исходников
 
@@ -34,28 +34,29 @@ bun run start
 
 ## Устройство проекта
 
-| Файл | Роль |
+| Путь | Роль |
 | --- | --- |
-| `main.js` | Окно Electron, файловая система, IPC, метаданные, Git, FFmpeg и нативные диалоги. |
-| `preload.js` | Ограниченный API `window.folderVideo` для renderer-процесса. |
-| `app.js` | Состояние интерфейса, вкладки, библиотека, плеер, кадры и настройки. |
-| `thumbnail-queue.js` | Очередь декодирования миниатюр. |
-| `video-metadata-store.js` | Чтение и атомарная запись JSON-метаданных. |
-| `hash-file.js` | Потоковый отменяемый расчёт SHA-256. |
+| `src/main/main.js` | Окно Electron, файловая система, IPC, метаданные, Git, FFmpeg и нативные диалоги. |
+| `src/main/*.js` | Модули main-процесса: метаданные (`video-metadata-store.js`), SHA-256 (`hash-file.js`), вырезка (`cut-ffmpeg.js`, `cut-undo.js`), обновления, сводки, YouTube-ссылки. |
+| `src/preload/preload.js` | Ограниченный API `window.folderVideo` для renderer-процесса. |
+| `src/renderer/` | `index.html`, `app.js`, `app.css` — интерфейс без Node.js; `lib/` — очередь миниатюр и сессия вкладок. |
+| `src/shared/` | Чистые модули без Node.js API, общие для main и renderer: `cut-core.js`, `notes-core.js`, `waveform-core.js`. |
+| `tests/` | Тесты Node test runner; структура повторяет `src/`. |
+| `scripts/`, `tools/`, `assets/` | Скрипты разработки и интеграции, нативные библиотеки распознавания, иконки. |
 
-Node.js API и Electron API находятся только в `main.js` и `preload.js`. В renderer отключён `nodeIntegration`; включены `contextIsolation` и sandbox.
+Node.js API и Electron API находятся только в `src/main/` и `src/preload/preload.js`. В renderer отключён `nodeIntegration`; включены `contextIsolation` и sandbox.
 
 ## Проверки
 
 ```powershell
-node --check main.js
-node --check preload.js
-node --check app.js
+node --check src/main/main.js
+node --check src/preload/preload.js
+node --check src/renderer/app.js
 bun run test
 git diff --check
 ```
 
-`bun run test` запускает Node test runner для `thumbnail-queue.test.js` и `move-file-conflict.test.js`.
+`bun run test` запускает Node test runner для всех файлов `tests/**/*.test.js`.
 
 ## Упаковка
 
@@ -73,7 +74,7 @@ bun run package
 bun run make
 ```
 
-Подробности: [BUILDING-WINDOWS.md](../BUILDING-WINDOWS.md). Интеграция с Проводником описана в [EXPLORER-MENU.md](../EXPLORER-MENU.md).
+Подробности: [BUILDING-WINDOWS.md](BUILDING-WINDOWS.md). Интеграция с Проводником описана в [EXPLORER-MENU.md](EXPLORER-MENU.md).
 
 ## Ограничения и безопасность
 

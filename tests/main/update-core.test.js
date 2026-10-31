@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { RELEASES_REPO, parseVersion, compareVersions, parseRelease, latestRelease } = require('./update-core');
+const { RELEASES_REPO, parseVersion, compareVersions, parseRelease, latestRelease } = require('../../src/main/update-core');
 
 function fixture(version, extra = {}) {
   const tag = `folder-video-v${version}`;

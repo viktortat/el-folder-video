@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { mkdtemp, rm } = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { VideoMetadataStore } = require('./video-metadata-store');
+const { VideoMetadataStore } = require('../../src/main/video-metadata-store');
 
 async function store(t) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'fv-meta-test-'));

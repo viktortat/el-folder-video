@@ -4,3 +4,4 @@ out/
 scripts/__pycache__/
 tools/transcribe-cpp/transcribe-native.tar.gz
 
+.run/

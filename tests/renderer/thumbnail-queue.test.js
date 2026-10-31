@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const ThumbnailQueue = require("./thumbnail-queue.js");
+const ThumbnailQueue = require("../../src/renderer/lib/thumbnail-queue.js");
 
 async function run() {
   await preservesFifoOrder();

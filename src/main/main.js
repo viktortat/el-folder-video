@@ -11,12 +11,12 @@ const { VideoMetadataStore } = require('./video-metadata-store');
 const { hashFile } = require('./hash-file');
 const { createSameFileMoveConflict } = require('./move-file-conflict');
 const { UNDO_DIRECTORY, CutUndoStore } = require('./cut-undo');
-const { reencodeCodecArguments } = require('./cut-core');
+const { reencodeCodecArguments } = require('../shared/cut-core');
 const { probeDuration, listKeyframes, planCut, executeCut } = require('./cut-ffmpeg');
-const { shiftNotes } = require('./notes-core');
+const { shiftNotes } = require('../shared/notes-core');
 const youtubeLink = require('./youtube-link-core');
 const { readAuthorUrl, writeAuthorUrl } = require('./author-url-property');
-const { PeakCollector, SAMPLE_RATE, BINS_PER_SECOND } = require('./waveform-core');
+const { PeakCollector, SAMPLE_RATE, BINS_PER_SECOND } = require('../shared/waveform-core');
 const { RELEASES_API, compareVersions, latestRelease } = require('./update-core');
 const { srtSegments, transcriptBatches, normalizeSummary, FRAME_COUNT, frameTimes, parseVideoLink, parseRegValue, playerLaunch, safeNoteName, buildObsidianArticle, buildObsidianAddendum } = require('./summary-core');
 
@@ -309,10 +309,10 @@ function createWindow() {
     minWidth: 980,
     minHeight: 640,
     title: APP_TITLE,
-    icon: nativeImage.createFromPath(path.join(__dirname, 'assets', 'folder-video.png')),
+    icon: nativeImage.createFromPath(path.join(__dirname, '..', '..', 'assets', 'folder-video.png')),
     backgroundColor: '#101216',
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, '..', 'preload', 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true
@@ -336,7 +336,7 @@ function createWindow() {
   });
   mainWindow.webContents.session.clearCache()
     .catch(() => {})
-    .finally(() => { mainWindow.loadFile('index.html'); });
+    .finally(() => { mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html')); });
 }
 
 async function getLaunchTarget(argv) {
@@ -509,8 +509,8 @@ function transcriptionRuntime() {
     const nativeRoot = path.join(process.resourcesPath, 'transcribe-native-windows-x86_64-cpu-vulkan');
     return { script: path.join(process.resourcesPath, 'transcribe_handy.py'), dll: path.join(nativeRoot, 'transcribe.dll') };
   }
-  const nativeRoot = path.join(__dirname, 'tools', 'transcribe-cpp', 'transcribe-native-windows-x86_64-cpu-vulkan');
-  return { script: path.join(__dirname, 'scripts', 'transcribe_handy.py'), dll: path.join(nativeRoot, 'transcribe.dll') };
+  const nativeRoot = path.join(__dirname, '..', '..', 'tools', 'transcribe-cpp', 'transcribe-native-windows-x86_64-cpu-vulkan');
+  return { script: path.join(__dirname, '..', '..', 'scripts', 'transcribe_handy.py'), dll: path.join(nativeRoot, 'transcribe.dll') };
 }
 function cancelTranscriptJob(job) {
   job.canceled = true;

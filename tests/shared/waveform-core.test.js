@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { PeakCollector, peakGain, waveformColumns } = require('./waveform-core');
+const { PeakCollector, peakGain, waveformColumns } = require('../../src/shared/waveform-core');
 
 function pcm(samples) {
   const buffer = Buffer.alloc(samples.length * 2);

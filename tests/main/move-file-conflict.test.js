@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const { createSameFileMoveConflict } = require("./move-file-conflict.js");
+const { createSameFileMoveConflict } = require("../../src/main/move-file-conflict.js");
 
 const sourcePath = "K:\\videos\\example.mp4";
 

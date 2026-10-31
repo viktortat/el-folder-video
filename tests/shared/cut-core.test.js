@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const core = require('./cut-core');
+const core = require('../../src/shared/cut-core');
 
 test('диапазоны сортируются, обрезаются по длительности и сливаются', () => {
   const result = core.normalizeRanges([{ start: 30, end: 40 }, { start: 5, end: 12 }, { start: 10, end: 20 }, { start: 95, end: 130 }, { start: 3, end: 3.01 }], 100);

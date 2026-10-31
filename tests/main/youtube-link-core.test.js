@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const core = require('./youtube-link-core');
+const core = require('../../src/main/youtube-link-core');
 
 test('из названия убираются расширение, язык дубляжа и коэффициент ускорения', () => {
   assert.equal(core.cleanSearchTitle('Мой урок (RU)_2x.mp4'), 'Мой урок');

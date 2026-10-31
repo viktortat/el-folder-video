@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { srtSegments, transcriptBatches, normalizeSummary, frameTimes, videoLink, parseVideoLink, buildObsidianArticle, parseRegValue, playerLaunch } = require('./summary-core');
+const { srtSegments, transcriptBatches, normalizeSummary, frameTimes, videoLink, parseVideoLink, buildObsidianArticle, parseRegValue, playerLaunch } = require('../../src/main/summary-core');
 
 test('темы получают таймкоды только существующих сегментов SRT', () => {
   const segments = srtSegments('1\n00:00:08,500 --> 00:00:10,000\nНачало\n\n2\n00:11:02,250 --> 00:11:05,000\nВторая тема\n');

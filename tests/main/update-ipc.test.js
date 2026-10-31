@@ -8,10 +8,11 @@ const { createHash } = require('node:crypto');
 const path = require('node:path');
 const os = require('node:os');
 const vm = require('node:vm');
-const { RELEASES_REPO } = require('./update-core');
+const { RELEASES_REPO } = require('../../src/main/update-core');
 
-const source = readFileSync(path.join(__dirname, 'main.js'), 'utf8');
-const current = require('./package.json').version;
+const mainDir = path.join(__dirname, '..', '..', 'src', 'main');
+const source = readFileSync(path.join(mainDir, 'main.js'), 'utf8');
+const current = require('../../package.json').version;
 const payload = Buffer.from('test installer bytes');
 
 function release(version = '99.0.0', bytes = payload) {
@@ -60,7 +61,7 @@ async function harness(t, options = {}) {
   }
   const electron = {
     app: { isPackaged: options.packaged !== false, getVersion: () => current,
-      getPath: name => paths[name], getAppPath: () => __dirname,
+      getPath: name => paths[name], getAppPath: () => mainDir,
       setAppUserModelId() {}, setAsDefaultProtocolClient() {}, requestSingleInstanceLock: () => true,
       on() {}, whenReady: () => ({ then: fn => { ready = fn; } }), quit: () => { quit = true; } },
     BrowserWindow: Window, Menu: { setApplicationMenu() {} }, nativeImage: { createFromPath() {} },
@@ -85,7 +86,7 @@ async function harness(t, options = {}) {
     }
   };
   const context = vm.createContext({ Buffer, URL, AbortSignal, console, queueMicrotask,
-    __dirname, setTimeout: (fn, delay) => {
+    __dirname: mainDir, setTimeout: (fn, delay) => {
       if (delay === 10000) { startupTimers.push(fn); return { unref() {} }; }
       return setTimeout(fn, delay);
     }, clearTimeout,
@@ -104,7 +105,7 @@ async function harness(t, options = {}) {
         queueMicrotask(() => child.emit(options.spawnError ? 'error' : 'spawn', new Error('spawn failed')));
         return child;
       } };
-      return require(name);
+      return require(name.startsWith('.') ? path.join(mainDir, name) : name);
     }
   });
   vm.runInContext(source, context, { filename: 'main.js' });

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { mkdtemp, mkdir, readFile, readdir, rm, stat, utimes, writeFile } = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { CutUndoStore, UNDO_DIRECTORY } = require('./cut-undo');
+const { CutUndoStore, UNDO_DIRECTORY } = require('../../src/main/cut-undo');
 
 async function workspace(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'fv-undo-test-'));

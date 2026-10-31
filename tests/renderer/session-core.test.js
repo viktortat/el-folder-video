@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { snapshot, parse } = require('./session-core');
+const { snapshot, parse } = require('../../src/renderer/lib/session-core');
 
 test('сессия сохраняет порядок, активную вкладку и параметры плеера', () => {
   const state = { folderPath: 'D:\\Видео', recursive: true, activeTab: 'two', tabs: [

@@ -2,14 +2,14 @@
   "name": "folder-video",
   "version": "1.0.28",
   "description": "Локальный браузер папок с видео и покадровым просмотром.",
-  "main": "main.js",
+  "main": "src/main/main.js",
   "scripts": {
     "start": "electron-forge start",
     "package": "electron-forge package",
     "make": "electron-forge make",
     "package:mac": "electron-forge package --platform=darwin",
     "make:mac": "electron-forge make --platform=darwin",
-    "test": "node --test thumbnail-queue.test.js move-file-conflict.test.js summary-core.test.js notes-core.test.js session-core.test.js cut-core.test.js cut-undo.test.js cut-ffmpeg.test.js video-metadata-store.test.js waveform-core.test.js youtube-link-core.test.js author-url-property.test.js update-core.test.js update-ipc.test.js"
+    "test": "node --test \"tests/**/*.test.js\""
   },
   "author": "vik",
   "license": "MIT",

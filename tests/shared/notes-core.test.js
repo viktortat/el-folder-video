@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { formatNoteTime, parseNotes, activeNote, upsertNote, shiftNotes } = require('./notes-core');
+const { formatNoteTime, parseNotes, activeNote, upsertNote, shiftNotes } = require('../../src/shared/notes-core');
 
 test('заметки разбираются по временным меткам и строкам ---', () => {
   const notes = parseNotes('[10:40]\nПервый абзац\nВторая строка\n---\n[1:02:03] Другая заметка\n');

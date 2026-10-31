@@ -4,7 +4,7 @@ const { spawn } = require('node:child_process');
 const { mkdtemp, rm, statfs, stat, writeFile } = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const core = require('./cut-core');
+const core = require('../shared/cut-core');
 
 function cancelError() { const error = new Error('Операция отменена'); error.code = 'ECANCELED'; return error; }
 

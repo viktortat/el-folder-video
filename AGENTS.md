@@ -10,17 +10,17 @@
 
 - Electron Forge, Electron 30, vanilla HTML/CSS/JavaScript.
 - Пакетный менеджер и запуск скриптов — Bun; зависимости фиксируются в `bun.lock`.
-- Метаданные видео хранятся в JSON-файлах по SHA-256 содержимого (`video-metadata-store.js`); `marked` — для Markdown-предпросмотра. В `package.json` `better-sqlite3` нет.
-- `main.js` — единственное место для Node.js API, файловой системы, Electron `shell` и нативных диалогов.
-- `preload.js` — единственный мост между renderer и main через `contextBridge`.
-- `app.js` и `app.css` работают в renderer без Node.js.
+- Метаданные видео хранятся в JSON-файлах по SHA-256 содержимого (`src/main/video-metadata-store.js`); `marked` — для Markdown-предпросмотра. В `package.json` `better-sqlite3` нет.
+- `src/main/main.js` — единственное место для Node.js API, файловой системы, Electron `shell` и нативных диалогов.
+- `src/preload/preload.js` — единственный мост между renderer и main через `contextBridge`.
+- `src/renderer/` (`app.js`, `app.css`, `index.html`, `lib/`) работает в renderer без Node.js. `src/shared/` — чистые модули без Node.js API, загружаемые и в main через `require`, и в renderer через `<script>`.
 - Не включать `nodeIntegration`, не отключать `contextIsolation` и sandbox.
-- Не импортировать Node.js или Electron API напрямую в `app.js`.
+- Не импортировать Node.js или Electron API напрямую в `src/renderer/app.js`.
 
 ## Правила доработок
 
 - Сохранять работу в одном окне и модель пользовательских вкладок приложения.
-- Любую новую возможность, требующую доступа к ОС или файлам, добавлять цепочкой: `main.js` IPC handler → `preload.js` API → `app.js`.
+- Любую новую возможность, требующую доступа к ОС или файлам, добавлять цепочкой: `src/main/main.js` IPC handler → `src/preload/preload.js` API → `src/renderer/app.js`.
 - Не жёстко кодировать пути к внешним приложениям. Для открытия файла в системной программе использовать `shell.openPath()`.
 - Не добавлять дисковый кэш миниатюр без отдельного требования. Кэш кадров должен оставаться в памяти.
 - При смене папки освобождать object URL и очищать кэш и вкладки, относящиеся к прежней папке.
@@ -28,8 +28,8 @@
 - Поддерживать обе темы: любые новые элементы обязаны иметь корректные dark и `body.light` состояния.
 - Не ухудшать доступность: интерактивным элементам задавать `title` и `aria-label`, когда назначение не очевидно из текста.
 - Для ускорения видео использовать системный `ffmpeg`, вызываемый по имени из `PATH`; не встраивать жёстко заданные пути к бинарнику.
-- Вырезка фрагментов: логика диапазонов и аргументов ffmpeg — в `cut-core.js` (без Node.js API), запуск ffmpeg/ffprobe — в `cut-ffmpeg.js`, бэкапы и откат — в `cut-undo.js`. Оригинал при замене уходит в `.fv-undo` рядом с видео, а не в корзину; сканер этот каталог пропускает. `ffprobe` вызывается по имени из `PATH`.
-- Поддерживаемые расширения должны оставаться согласованными между `app.js`, IPC и скриптами интеграции с Проводником: `mp4`, `webm`, `mov`, `avi`, `mkv`, `m4v`, `ogv`.
+- Вырезка фрагментов: логика диапазонов и аргументов ffmpeg — в `src/shared/cut-core.js` (без Node.js API), запуск ffmpeg/ffprobe — в `src/main/cut-ffmpeg.js`, бэкапы и откат — в `src/main/cut-undo.js`. Оригинал при замене уходит в `.fv-undo` рядом с видео, а не в корзину; сканер этот каталог пропускает. `ffprobe` вызывается по имени из `PATH`.
+- Поддерживаемые расширения должны оставаться согласованными между `src/renderer/app.js`, IPC и скриптами интеграции с Проводником: `mp4`, `webm`, `mov`, `avi`, `mkv`, `m4v`, `ogv`.
 
 ## Пакетный менеджер
 
@@ -43,9 +43,9 @@
 Перед передачей результата выполнить из этой папки:
 
 ```powershell
-node --check main.js
-node --check preload.js
-node --check app.js
+node --check src/main/main.js
+node --check src/preload/preload.js
+node --check src/renderer/app.js
 bun run test
 git diff --check
 ```
@@ -62,10 +62,10 @@ Portable-сборка создаётся в `out\folder-video-win32-x64\folder-v
 
 ## Документация
 
-- При изменении поведения обновлять `README.md` и, если изменились требования, `folder-video-prd.md`.
-- Подробные команды сборки и установки находятся в `BUILDING-WINDOWS.md`.
-- Инструкции по macOS находятся в `BUILDING-MACOS.md`; DMG собирается только на macOS.
-- `EXPLORER-MENU.md` описывает интеграцию с контекстным меню Windows, а скрипты для неё находятся в `scripts/`.
+- При изменении поведения обновлять `README.md` и, если изменились требования, `docs/folder-video-prd.md`.
+- Подробные команды сборки и установки находятся в `docs/BUILDING-WINDOWS.md`.
+- Инструкции по macOS находятся в `docs/BUILDING-MACOS.md`; DMG собирается только на macOS.
+- `docs/EXPLORER-MENU.md` описывает интеграцию с контекстным меню Windows, а скрипты для неё находятся в `scripts/`.
 
 ## Known Issues
 
