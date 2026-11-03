@@ -409,3 +409,4 @@ body.light .settings-view .settings-row .update-status.error { color:#b3263f; }
 @media (prefers-reduced-motion:reduce) {
   .settings-view *, .settings-view *::after { transition:none; }
 }
+.video-stage video, .video-stage.has-cut-bar video { flex:1 1 0; width:100%; height:auto; min-height:120px; max-width:100%; max-height:none; object-fit:contain; }
