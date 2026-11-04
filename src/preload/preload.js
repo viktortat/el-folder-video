@@ -53,6 +53,7 @@ contextBridge.exposeInMainWorld('folderVideo', {
   cancelSummary: filePath => ipcRenderer.invoke('folder-video:summary-cancel', filePath),
   exportSummaryToObsidian: (filePath, duration, mode) => ipcRenderer.invoke('folder-video:summary-export-obsidian', filePath, duration, mode),
   getObsidianArticle: filePath => ipcRenderer.invoke('folder-video:summary-obsidian-path', filePath),
+  transcriptFileAction: (filePath, action) => ipcRenderer.invoke('folder-video:transcript-file-action', filePath, action),
   loadNotes: filePath => ipcRenderer.invoke('folder-video:notes-load', filePath),
   saveNotes: (filePath, text) => ipcRenderer.invoke('folder-video:notes-save', filePath, text),
   onTranscriptProgress: callback => {

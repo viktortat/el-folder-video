@@ -1404,6 +1404,29 @@ ipcMain.handle('folder-video:summary-cancel', (_event, filePath) => {
   job.controller.abort();
   return { canceled: true };
 });
+ipcMain.handle('folder-video:transcript-file-action', async (event, filePath, action) => {
+  if (typeof filePath !== 'string' || !VIDEO_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return { error: 'Некорректный путь к видео' };
+  const { srtPath } = transcriptPaths(filePath);
+  const exists = await lstat(srtPath).then(info => info.isFile(), () => false);
+  if (!exists) return { error: 'Файл транскрипции ещё не создан: сначала транскрибируйте видео.' };
+  if (action === 'open') {
+    const error = await shell.openPath(srtPath);
+    return error ? { error } : { path: srtPath };
+  }
+  if (action === 'copy-path') { clipboard.writeText(srtPath); return { path: srtPath }; }
+  if (action === 'save-as') {
+    const parsed = path.parse(filePath);
+    const result = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender), {
+      title: 'Сохранить транскрипцию как',
+      defaultPath: path.join(parsed.dir, `${parsed.name}.srt`),
+      filters: [{ name: 'Субтитры SRT', extensions: ['srt'] }, { name: 'Все файлы', extensions: ['*'] }]
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    try { await copyFile(srtPath, result.filePath); return { path: result.filePath }; }
+    catch (error) { return { error: error.message || 'Не удалось сохранить файл' }; }
+  }
+  return { error: 'Неизвестное действие' };
+});
 ipcMain.handle('folder-video:summary-obsidian-path', async (_event, filePath) => {
   if (typeof filePath !== 'string') return { exists: false };
   const target = obsidianArticlePath(filePath);

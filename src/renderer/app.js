@@ -1333,6 +1333,7 @@
       .replace('</button></div><button id="transcriptAction"', '</button><button data-panel-mode="summary" class="' + (tab.panelMode === "summary" ? "active" : "") + '" title="Показать сводку" aria-label="Показать сводку">✦</button></div><button id="transcriptAction"')
       .replace('</button></div><button id="transcriptAction"', '</button><button data-panel-mode="notes" class="' + (tab.panelMode === "notes" ? "active" : "") + '" title="Показать заметки" aria-label="Показать заметки">✎</button></div><button id="transcriptAction"')
       .replace('<button id="transcriptAction"', '<div class="obsidian-split"><button id="obsidianExport" class="transcript-action obsidian-main" title="Пересоздать статью в Obsidian" aria-label="Пересоздать статью в Obsidian"><svg class="transcript-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h6"/></svg></button><button id="obsidianMenuToggle" class="transcript-action obsidian-caret" type="button" title="Действия со статьёй" aria-label="Действия со статьёй" aria-haspopup="menu" aria-expanded="false"><svg class="transcript-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg></button><div id="obsidianMenu" class="obsidian-menu is-hidden" role="menu"><button type="button" role="menuitem" data-article-action="append" title="Добавить текущую сводку в конец статьи" aria-label="Дополнить статью">Дополнить статью</button><button type="button" role="menuitem" data-article-action="open" title="Открыть статью в Obsidian" aria-label="Открыть статью">Открыть статью</button></div></div><button id="transcriptAction"')
+      .replace('<div class="obsidian-split">', '<div class="obsidian-split"><button id="transcriptFileOpen" class="transcript-action obsidian-main" title="Открыть файл транскрипции" aria-label="Открыть файл транскрипции"><svg class="transcript-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14M5 10h14M5 15h9M5 20h12"/></svg></button><button id="transcriptFileMenuToggle" class="transcript-action obsidian-caret" type="button" title="Действия с файлом транскрипции" aria-label="Действия с файлом транскрипции" aria-haspopup="menu" aria-expanded="false"><svg class="transcript-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg></button><div id="transcriptFileMenu" class="obsidian-menu is-hidden" role="menu"><button type="button" role="menuitem" data-transcript-file-action="save-as" title="Сохранить файл транскрипции как…" aria-label="Сохранить транскрипцию как">Сохранить как…</button><button type="button" role="menuitem" data-transcript-file-action="copy-path" title="Скопировать путь к файлу транскрипции" aria-label="Скопировать путь к файлу транскрипции">Копировать путь</button></div></div><div class="obsidian-split">')
       .replace('</div></aside>', '</div><div id="summaryScroll" class="summary-scroll' + (tab.panelMode === "summary" ? '' : ' is-hidden') + '"></div><div id="notesScroll" class="notes-scroll' + (tab.panelMode === "notes" ? '' : ' is-hidden') + '"></div></aside>');
   }
   async function flushPlayerNotes(tab) {
@@ -1750,6 +1751,23 @@
     });
     articleMenu.addEventListener("keydown", function(event) { if (event.key === "Escape") { closeArticleMenu(); articleToggle.focus(); } });
     articleMenu.querySelectorAll("[data-article-action]").forEach(function(item) { item.addEventListener("click", function() { closeArticleMenu(); if (item.dataset.articleAction === "open") openSummaryArticle(tab); else exportSummaryArticle(tab, "append"); }); });
+    var fileMenu = $("#transcriptFileMenu"); var fileToggle = $("#transcriptFileMenuToggle");
+    function closeFileMenu() { fileMenu.classList.add("is-hidden"); fileToggle.setAttribute("aria-expanded", "false"); document.removeEventListener("click", outsideFileMenu, true); }
+    function outsideFileMenu(event) { if (!fileMenu.contains(event.target) && !fileToggle.contains(event.target)) closeFileMenu(); }
+    async function runTranscriptFileAction(action) {
+      var result = await window.folderVideo.transcriptFileAction(tab.video.path, action);
+      if (result.error) notice(result.error);
+      else if (result.canceled) return;
+      else if (action === "copy-path") notice("Путь к файлу транскрипции скопирован", true);
+      else if (action === "save-as") notice("Транскрипция сохранена: " + result.path, true);
+    }
+    $("#transcriptFileOpen").addEventListener("click", function() { closeFileMenu(); runTranscriptFileAction("open"); });
+    fileToggle.addEventListener("click", function() {
+      if (!fileMenu.classList.contains("is-hidden")) { closeFileMenu(); return; }
+      fileMenu.classList.remove("is-hidden"); fileToggle.setAttribute("aria-expanded", "true"); document.addEventListener("click", outsideFileMenu, true);
+    });
+    fileMenu.addEventListener("keydown", function(event) { if (event.key === "Escape") { closeFileMenu(); fileToggle.focus(); } });
+    fileMenu.querySelectorAll("[data-transcript-file-action]").forEach(function(item) { item.addEventListener("click", function() { closeFileMenu(); runTranscriptFileAction(item.dataset.transcriptFileAction); }); });
     $("#columns").addEventListener("change", function(event) {
       tab.columns = Number(event.target.value);
       var grid = $("#frameGrid");
