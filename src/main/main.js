@@ -507,9 +507,10 @@ async function validateNotesVideo(filePath) {
   if (typeof filePath !== 'string' || !VIDEO_EXTENSIONS.has(path.extname(filePath).toLowerCase())) throw new Error('Некорректный путь к видео');
   const stat = await lstat(filePath);
   if (!stat.isFile()) throw new Error('Указанный путь не является файлом');
+  return stat;
 }
 async function loadNotes(filePath) {
-  try { await validateNotesVideo(filePath); }
+  try { const stat = await validateNotesVideo(filePath); await transcriptStore.relocate(filePath, stat).catch(() => {}); }
   catch (error) { return { error: error.message || 'Не удалось открыть видео' }; }
   try { return { text: await readFile(notesPath(filePath), 'utf8') }; }
   catch (error) { return error.code === 'ENOENT' ? { text: '' } : { error: error.message || 'Не удалось открыть заметки' }; }

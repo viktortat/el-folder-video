@@ -59,6 +59,13 @@ function isTranscriptFresh(manifest, signature) {
   return m.source.path === signature.filePath && m.source.size === signature.size && m.source.mtimeMs === signature.mtimeMs;
 }
 
+// Манифест описывает то же видео, которое перенесли: другой путь, тот же размер и mtime.
+function isMovedSource(manifest, signature) {
+  const m = readManifest(manifest);
+  if (!m || m.source.kind !== 'file' || typeof m.source.path !== 'string') return false;
+  return m.source.path !== signature.filePath && m.source.size === signature.size && m.source.mtimeMs === signature.mtimeMs;
+}
+
 // Сводка актуальна, пока не менялся текст транскрипции.
 function isSummaryFresh(saved, transcriptHash) {
   return Boolean(saved) && typeof saved.transcriptHash === 'string' && saved.transcriptHash === transcriptHash;
@@ -111,6 +118,6 @@ function toSrt(segments) {
   return segments.map((segment, index) => `${index + 1}\n${srtTime(segment.start)} --> ${srtTime(segment.end)}\n${segment.text}\n`).join('\n');
 }
 
-const core = { MANIFEST_VERSION, LOCK_MAX_AGE_MS, fileStem, isYoutubeId, youtubeStem, fileManifestSource, buildManifest, readManifest, isTranscriptFresh, isSummaryFresh, buildLock, isLockStale, wordsToPhrases, toSrt, srtTime, round2 };
+const core = { MANIFEST_VERSION, LOCK_MAX_AGE_MS, fileStem, isYoutubeId, youtubeStem, fileManifestSource, buildManifest, readManifest, isTranscriptFresh, isMovedSource, isSummaryFresh, buildLock, isLockStale, wordsToPhrases, toSrt, srtTime, round2 };
 if (typeof module !== 'undefined' && module.exports) module.exports = core;
 else globalThis.TranscriptStoreCore = core;

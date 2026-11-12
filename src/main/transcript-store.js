@@ -45,8 +45,55 @@ function createTranscriptStore({ getDirectory, appId = 'folder-video' }) {
 
   const signatureOf = (filePath, stat) => ({ filePath, size: stat.size, mtimeMs: stat.mtimeMs });
 
+  const exists = target => lstat(target).then(() => true, () => false);
+  const relocationChecked = new Set();
+
+  // Видео перенесли (путь изменился, размер и mtime те же): файлы со старым stem переименовываются под новый.
+  // Существующие файлы нового stem не перезаписываются; неоднозначные совпадения пропускаются.
+  async function relocate(filePath, stat) {
+    const signature = signatureOf(filePath, stat);
+    const checkKey = `${filePath}|${stat.size}|${stat.mtimeMs}`;
+    if (relocationChecked.has(checkKey)) return { moved: 0 };
+    const p = paths(filePath);
+    if (await exists(p.manifestPath)) return { moved: 0 };
+    let names;
+    try { names = await readdir(p.directory); } catch { return { moved: 0 }; }
+    const prefix = `${p.stem.slice(0, -12)}`;
+    const oldStems = names.filter(name => name.startsWith(prefix) && /^[0-9a-f]{12}\.json$/i.test(name.slice(prefix.length))).map(name => name.slice(0, -5)).filter(stem => stem !== p.stem);
+    const candidates = [];
+    for (const stem of oldStems) {
+      try {
+        const manifest = JSON.parse(await readFile(path.join(p.directory, `${stem}.json`), 'utf8'));
+        if (!core.isMovedSource(manifest, signature)) continue;
+        if (await exists(core.readManifest(manifest).source.path)) continue; // старый файл на месте — это другая копия
+        candidates.push(stem);
+      } catch { /* повреждённый манифест пропускаем */ }
+    }
+    relocationChecked.add(checkKey);
+    if (candidates.length !== 1) return { moved: 0 };
+    const from = pathsForStem(p.directory, candidates[0]);
+    let moved = 0;
+    for (const [oldPath, newPath] of [[from.srtPath, p.srtPath], [from.txtPath, p.txtPath], [from.manifestPath, p.manifestPath], [from.notesPath, p.notesPath], [from.summaryPath, p.summaryPath],
+      [`${path.join(p.directory, from.stem)}.ru.srt`, `${path.join(p.directory, p.stem)}.ru.srt`], [`${path.join(p.directory, from.stem)}.ru.txt`, `${path.join(p.directory, p.stem)}.ru.txt`]]) {
+      if (!(await exists(oldPath)) || await exists(newPath)) continue;
+      try { await rename(oldPath, newPath); moved++; } catch { /* остальные файлы всё равно переносим */ }
+    }
+    for (const [file, key] of [[p.manifestPath, 'source'], [p.summaryPath, 'summary']]) {
+      try {
+        const data = JSON.parse(await readFile(file, 'utf8'));
+        if (key === 'source' && data.source?.kind === 'file') data.source.path = filePath;
+        else if (key === 'source' && typeof data.filePath === 'string') data.filePath = filePath;
+        else if (key === 'summary' && typeof data.filePath === 'string') data.filePath = filePath;
+        else continue;
+        await atomicWrite(file, `${JSON.stringify(data, null, 2)}\n`);
+      } catch { /* файла нет или он не наш */ }
+    }
+    return { moved };
+  }
+
   // Транскрипция самого видео: { available, srt, srtPath } | { available: false, stale? } | { error }.
   async function readOwn(filePath, stat) {
+    await relocate(filePath, stat).catch(() => {});
     const p = paths(filePath);
     try {
       const manifest = JSON.parse(await readFile(p.manifestPath, 'utf8'));
@@ -134,7 +181,7 @@ function createTranscriptStore({ getDirectory, appId = 'folder-video' }) {
     return result;
   }
 
-  return { stemFor, paths, youtubePaths, atomicWrite, read, readOwn, write, acquireLock, listStoreFiles, moveStoreFiles, signatureOf };
+  return { stemFor, paths, youtubePaths, atomicWrite, read, readOwn, relocate, write, acquireLock, listStoreFiles, moveStoreFiles, signatureOf };
 }
 
 module.exports = { createTranscriptStore, youtubeIdFromUrl };
