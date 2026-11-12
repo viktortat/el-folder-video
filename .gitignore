@@ -5,3 +5,4 @@ scripts/__pycache__/
 tools/transcribe-cpp/transcribe-native.tar.gz
 
 .run/
+t1.md
