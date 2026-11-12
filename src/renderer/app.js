@@ -1716,10 +1716,16 @@
       togglePlayback.setAttribute("aria-label", playing ? "Поставить на паузу" : "Воспроизвести");
       togglePlayback.firstElementChild.textContent = playing ? "❚❚" : "▶";
     }
-    togglePlayback.addEventListener("click", function() { player.paused ? player.play().catch(function() {}) : player.pause(); });
+    togglePlayback.addEventListener("click", function() {
+      if (player.paused || player.ended) {
+        var attempt = player.play();
+        if (attempt && attempt.catch) attempt.catch(function(error) { updatePlaybackButton(); notice("Не удалось запустить видео: " + (error && error.message ? error.message : error)); });
+      } else player.pause();
+      updatePlaybackButton();
+    });
     player.addEventListener("play", function() { updatePlaybackButton(); refreshVideoNote(tab, player, false); flushPlayerNotes(tab); });
     player.addEventListener("pause", function() { updatePlaybackButton(); refreshVideoNote(tab, player, false); });
-    player.addEventListener("ended", updatePlaybackButton);
+    ["ended", "playing", "seeked", "emptied", "loadedmetadata", "error", "abort", "stalled"].forEach(function(name) { player.addEventListener(name, updatePlaybackButton); });
     $("#videoNote").addEventListener("input", function(event) {
       if (!player.paused || tab.notesStatus !== "ready") return;
       var text = event.target.value;
