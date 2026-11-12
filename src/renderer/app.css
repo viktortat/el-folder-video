@@ -410,3 +410,5 @@ body.light .settings-view .settings-row .update-status.error { color:#b3263f; }
   .settings-view *, .settings-view *::after { transition:none; }
 }
 .video-stage video, .video-stage.has-cut-bar video { flex:1 1 0; width:100%; height:auto; min-height:120px; max-width:100%; max-height:none; object-fit:contain; }
+.transcript-note { margin:8px 10px 4px; padding:4px 8px; border:1px solid #303946; border-radius:6px; color:#c7b9ed; background:#10141a; font:11px/1.4 Manrope,sans-serif; }
+body.light .transcript-note { color:#5932b8; background:#f1f4f9; border-color:#cbd4e1; }

@@ -1,6 +1,6 @@
 module.exports = {
   packagerConfig: {
-    asar: true,
+    asar: { unpack: '**/*.{node,dll}' },
     executableName: 'folder-video',
     icon: './assets/folder-video.ico',
     ignore: [
@@ -8,7 +8,6 @@ module.exports = {
       /^\/tests(?:\/|$)/
     ],
     extraResource: [
-      'scripts/transcribe_handy.py',
       'tools/transcribe-cpp/transcribe-native-windows-x86_64-cpu-vulkan'
     ]
   },

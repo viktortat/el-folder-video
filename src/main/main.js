@@ -3,7 +3,7 @@ const { readdir, lstat, stat, rename, copyFile, unlink, readFile, writeFile, mkd
 const { createWriteStream } = require('node:fs');
 const { Readable, Transform } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
-const { spawn } = require('node:child_process');
+const { spawn, fork } = require('node:child_process');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
@@ -14,6 +14,9 @@ const { UNDO_DIRECTORY, CutUndoStore } = require('./cut-undo');
 const { reencodeCodecArguments } = require('../shared/cut-core');
 const { probeDuration, listKeyframes, planCut, executeCut } = require('./cut-ffmpeg');
 const { shiftNotes } = require('../shared/notes-core');
+const { createTranscriptStore } = require('./transcript-store');
+const { environmentStatus, environmentDirectory, downloadEnvironment, cancelDownload, isDownloading } = require('./transcribe-env');
+const { isSummaryFresh } = require('../shared/transcript-store-core');
 const youtubeLink = require('./youtube-link-core');
 const { readAuthorUrl, writeAuthorUrl } = require('./author-url-property');
 const { PeakCollector, SAMPLE_RATE, BINS_PER_SECOND } = require('../shared/waveform-core');
@@ -47,16 +50,19 @@ let isRendererReady = false;
 let appSettings;
 let hasSettingsFile = false;
 
+function defaultTranscriptDirectory() { return path.join(app.getPath('documents'), 'Transcripts'); }
+function legacyTranscriptDirectory() { return path.join(app.getPath('userData'), 'transcripts'); }
+
 function defaultSettings() {
   return {
     version: 1,
     autoUpdate: true,
     theme: 'dark',
-    storage: { metadataDirectory: path.join(app.getPath('documents'), 'folder-video-metadata'), gitRepositoryUrl: '', obsidianInbox: 'C:\\_ObsidianDB\\ai-study\\00 Inbox', transcriptDirectory: path.join(app.getPath('userData'), 'transcripts') },
+    storage: { metadataDirectory: path.join(app.getPath('documents'), 'folder-video-metadata'), gitRepositoryUrl: '', obsidianInbox: 'C:\\_ObsidianDB\\ai-study\\00 Inbox', transcriptDirectory: defaultTranscriptDirectory() },
     viewer: { columns: 3, seconds: 10, scroll: 'center', panelWidth: 410 },
     interface: { metadataCollapsed: false, gridCollapsed: false },
     cut: { replaceOriginal: true },
-    transcription: { modelPath: '' },
+    transcription: { modelPath: '', environmentDirectory: '', legacyMigrationAsked: false },
     ai: { model: 'deepseek-flash', apiKey: '', keyConfigured: false, clearKey: false }
   };
 }
@@ -82,7 +88,11 @@ function normalizeSettings(value) {
     storage: { metadataDirectory, gitRepositoryUrl, obsidianInbox, transcriptDirectory }, viewer: { columns, seconds, scroll, panelWidth },
     interface: { metadataCollapsed: source.interface?.metadataCollapsed === true, gridCollapsed: source.interface?.gridCollapsed === true },
     cut: { replaceOriginal: source.cut?.replaceOriginal !== false },
-    transcription: { modelPath: typeof source.transcription?.modelPath === 'string' ? source.transcription.modelPath.trim() : '' },
+    transcription: {
+      modelPath: typeof source.transcription?.modelPath === 'string' ? source.transcription.modelPath.trim() : '',
+      environmentDirectory: typeof source.transcription?.environmentDirectory === 'string' && source.transcription.environmentDirectory.trim() ? path.resolve(source.transcription.environmentDirectory) : '',
+      legacyMigrationAsked: source.transcription?.legacyMigrationAsked === true
+    },
     ai: { model: typeof source.ai?.model === 'string' && source.ai.model.trim() ? source.ai.model.trim() : 'deepseek-flash', apiKey: '', keyConfigured: false, clearKey: false }
   };
 }
@@ -129,12 +139,60 @@ async function saveSettings(settings) {
     await writeFile(temporaryPath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
     await rename(temporaryPath, settingsPath());
     if (normalized.storage.metadataDirectory !== appSettings.storage.metadataDirectory) metadataStore = new VideoMetadataStore(normalized.storage.metadataDirectory);
+    normalized.transcription.legacyMigrationAsked = normalized.transcription.legacyMigrationAsked || appSettings.transcription.legacyMigrationAsked;
+    const previousTranscriptDirectory = appSettings.storage.transcriptDirectory;
     appSettings = normalized;
     hasSettingsFile = true;
-    return { settings: appSettings };
+    const transcriptMove = await offerTranscriptMove(previousTranscriptDirectory, normalized.storage.transcriptDirectory);
+    return { settings: appSettings, transcriptMove };
   } catch (error) {
     return { error: `Не удалось сохранить config.json: ${error.message}` };
   }
+}
+
+function dialogWindow() { return BrowserWindow.getAllWindows()[0] || null; }
+
+// Предлагает перенести файлы транскрипций, заметок и сводок из прежней папки в новую; без согласия ничего не переносится.
+async function offerTranscriptMove(from, to) {
+  if (!from || !to || path.resolve(from).toLowerCase() === path.resolve(to).toLowerCase()) return null;
+  const names = await transcriptStore.listStoreFiles(from);
+  if (!names.length) return null;
+  const result = await dialog.showMessageBox(dialogWindow(), {
+    type: 'question', title: 'Папка транскрипций изменена',
+    message: `Переместить файлы транскрипций, сводок и заметок (${names.length}) в новую папку?`,
+    detail: `Из: ${from}\nВ: ${to}\nФайлы, которые уже есть в новой папке, не перезаписываются.`,
+    buttons: ['Переместить', 'Не перемещать'], defaultId: 0, cancelId: 1, noLink: true
+  });
+  if (result.response !== 0) return { moved: 0, skipped: 0, failed: 0, declined: true };
+  return transcriptStore.moveStoreFiles(from, to);
+}
+
+// Однократно после обновления: файлы из прежней папки по умолчанию (userData\transcripts) переходят в общую папку.
+async function offerLegacyTranscriptMigration() {
+  if (!hasSettingsFile || appSettings.transcription.legacyMigrationAsked) return;
+  const legacy = legacyTranscriptDirectory();
+  const names = await transcriptStore.listStoreFiles(legacy);
+  const markAsked = async () => { await saveSettings({ ...appSettings, transcription: { ...appSettings.transcription, legacyMigrationAsked: true } }); };
+  if (!names.length) { await markAsked(); return; }
+  const current = appSettings.storage.transcriptDirectory;
+  if (path.resolve(current).toLowerCase() === path.resolve(legacy).toLowerCase()) {
+    const target = defaultTranscriptDirectory();
+    const result = await dialog.showMessageBox(dialogWindow(), {
+      type: 'question', title: 'Общая папка транскрипций',
+      message: `Транскрипции, сводки и заметки теперь хранятся в общей папке. Переместить файлы (${names.length}) туда?`,
+      detail: `Из: ${legacy}\nВ: ${target}\nОкошко и YouTube Radar используют ту же папку. Если не перемещать, останется прежняя папка.`,
+      buttons: ['Переместить', 'Оставить прежнюю папку'], defaultId: 0, cancelId: 1, noLink: true
+    });
+    if (result.response === 0) {
+      await transcriptStore.moveStoreFiles(legacy, target);
+      await saveSettings({ ...appSettings, storage: { ...appSettings.storage, transcriptDirectory: target }, transcription: { ...appSettings.transcription, legacyMigrationAsked: true } });
+    } else await markAsked();
+  } else {
+    const moved = await offerTranscriptMove(legacy, current);
+    void moved;
+    await markAsked();
+  }
+  for (const window of BrowserWindow.getAllWindows()) if (!window.webContents.isDestroyed()) window.webContents.send('folder-video:settings-changed', appSettings);
 }
 
 if (require('electron-squirrel-startup')) app.quit();
@@ -440,19 +498,11 @@ function outputPathForSpeedUp(filePath) {
   return path.join(parsed.dir, `${parsed.name}_2x${parsed.ext}`);
 }
 
-function transcriptDirectory() { return appSettings?.storage?.transcriptDirectory || path.join(app.getPath('userData'), 'transcripts'); }
+function transcriptDirectory() { return appSettings?.storage?.transcriptDirectory || defaultTranscriptDirectory(); }
 function transcriptKey(filePath) { return createHash('sha256').update(filePath).digest('hex').slice(0, 12); }
-function transcriptStem(filePath) {
-  const parsed = path.parse(filePath);
-  const safeName = parsed.name.replace(/[<>:"/\\|?*]/g, '_').slice(0, 120) || 'video';
-  return `${safeName}__${transcriptKey(filePath)}`;
-}
-function transcriptPaths(filePath) {
-  const stem = transcriptStem(filePath);
-  const directory = transcriptDirectory();
-  return { directory, stem, srtPath: path.join(directory, `${stem}.srt`), manifestPath: path.join(directory, `${stem}.json`) };
-}
-function notesPath(filePath) { return path.join(transcriptDirectory(), `${transcriptStem(filePath)}.notes.md`); }
+const transcriptStore = createTranscriptStore({ getDirectory: transcriptDirectory, appId: 'folder-video' });
+function transcriptPaths(filePath) { return transcriptStore.paths(filePath); }
+function notesPath(filePath) { return transcriptStore.paths(filePath).notesPath; }
 async function validateNotesVideo(filePath) {
   if (typeof filePath !== 'string' || !VIDEO_EXTENSIONS.has(path.extname(filePath).toLowerCase())) throw new Error('Некорректный путь к видео');
   const stat = await lstat(filePath);
@@ -484,33 +534,24 @@ function saveNotes(filePath, text) {
   job.finally(() => { if (notesSaveJobs.get(filePath) === job) notesSaveJobs.delete(filePath); });
   return job;
 }
-function sourceSignature(filePath, stat) { return { filePath, size: stat.size, mtimeMs: stat.mtimeMs }; }
-function isSameSource(manifest, signature) {
-  return manifest && manifest.filePath === signature.filePath && manifest.size === signature.size && manifest.mtimeMs === signature.mtimeMs
-    && (manifest.modelPath || '') === (appSettings.transcription?.modelPath || '');
+function sourceSignature(filePath, stat) { return transcriptStore.signatureOf(filePath, stat); }
+async function readLinkedYoutubeUrl(filePath) {
+  try {
+    if (!youtubeLink.isWritableExtension(path.extname(filePath))) return '';
+    const result = await readAuthorUrl(filePath);
+    return youtubeLink.isYouTubeVideoUrl(result.url) ? result.url : '';
+  } catch { return ''; }
 }
-async function loadTranscript(filePath) {
+// withYoutube: если у видео нет своей транскрипции, показать транскрипцию привязанного ролика YouTube (только чтение).
+async function loadTranscript(filePath, withYoutube = false) {
   if (typeof filePath !== 'string' || !VIDEO_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return { error: 'Некорректный путь к видео' };
   let stat;
   try { stat = await lstat(filePath); if (!stat.isFile()) return { error: 'Указанный путь не является файлом' }; }
   catch (error) { return { error: error.message || 'Не удалось прочитать видео' }; }
-  const paths = transcriptPaths(filePath);
-  try {
-    const manifest = JSON.parse(await readFile(paths.manifestPath, 'utf8'));
-    if (!isSameSource(manifest, sourceSignature(filePath, stat))) return { stale: true };
-    const srt = await readFile(paths.srtPath, 'utf8');
-    return { available: true, srt, srtPath: paths.srtPath };
-  } catch (error) {
-    return error.code === 'ENOENT' ? { available: false } : { error: `Не удалось открыть транскрипцию: ${error.message}` };
-  }
-}
-function transcriptionRuntime() {
-  if (app.isPackaged) {
-    const nativeRoot = path.join(process.resourcesPath, 'transcribe-native-windows-x86_64-cpu-vulkan');
-    return { script: path.join(process.resourcesPath, 'transcribe_handy.py'), dll: path.join(nativeRoot, 'transcribe.dll') };
-  }
-  const nativeRoot = path.join(__dirname, '..', '..', 'tools', 'transcribe-cpp', 'transcribe-native-windows-x86_64-cpu-vulkan');
-  return { script: path.join(__dirname, '..', '..', 'scripts', 'transcribe_handy.py'), dll: path.join(nativeRoot, 'transcribe.dll') };
+  const own = await transcriptStore.readOwn(filePath, stat);
+  if (!withYoutube || own.available || own.error) return own;
+  const linked = await readLinkedYoutubeUrl(filePath);
+  return linked ? transcriptStore.read(filePath, stat, linked) : own;
 }
 function cancelTranscriptJob(job) {
   job.canceled = true;
@@ -525,51 +566,45 @@ async function runTranscript(event, filePath, operationId) {
     sourceStat = await lstat(filePath);
     if (!sourceStat.isFile()) return { error: 'Указанный путь не является файлом' };
   } catch (error) { return { error: error.message || 'Не удалось прочитать видео' }; }
-  const runtime = transcriptionRuntime();
-  const modelPath = appSettings.transcription?.modelPath || '';
-  try { await Promise.all([lstat(runtime.script), lstat(runtime.dll)]); }
-  catch { return { error: 'Не найдено окружение транскрибации. Переустановите приложение.' }; }
-  if (modelPath) {
-    try { if (!(await lstat(modelPath)).isFile()) return { error: 'Путь к модели Parakeet должен указывать на файл GGUF.' }; }
-    catch (error) { return { error: `Модель Parakeet не найдена: ${error.message}` }; }
-  }
-  const paths = transcriptPaths(filePath);
-  await mkdir(paths.directory, { recursive: true });
+  const environment = environmentStatus(appSettings);
+  if (!environment.libraryFound) return { error: 'Не найдена библиотека распознавания. Скачайте её в настройках, раздел «Транскрибация».' };
+  if (!environment.modelFound) return { error: 'Модель распознавания не найдена. Скачайте её или укажите файл в настройках, раздел «Транскрибация».' };
+  const lock = await transcriptStore.acquireLock(filePath);
+  if (lock.error) return { error: lock.error };
   return new Promise(resolve => {
-    const args = [runtime.script, filePath, '--output-dir', paths.directory, '--output-stem', paths.stem, '--dll', runtime.dll];
-    if (modelPath) args.push('--model', modelPath);
-    const child = spawn('python', args, { windowsHide: true, env: { ...process.env, PYTHONUTF8: '1' } });
+    const child = fork(path.join(__dirname, 'transcribe-worker.js'), [JSON.stringify({ dll: environment.libraryPath, model: environment.modelPath, media: filePath })], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, silent: true });
     const job = { operationId, filePath, child, canceled: false };
     transcriptJobs.set(operationId, job);
     let stderr = '';
-    let stdout = '';
     let settled = false;
-    const finish = result => { if (!settled) { settled = true; resolve(result); } };
-    const sendProgress = (currentSeconds, totalSeconds) => {
-      if (!event.sender.isDestroyed() && totalSeconds > 0) event.sender.send('folder-video:transcript-progress', { operationId, percent: Math.max(0, Math.min(100, Math.round(currentSeconds / totalSeconds * 100))) });
-    };
-    child.stdout.on('data', chunk => {
-      stdout = (stdout + chunk).slice(-6000);
-      const match = stdout.match(/PROGRESS:(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)/g);
-      if (match) { const parts = match[match.length - 1].split(':'); sendProgress(Number(parts[1]), Number(parts[2])); }
-    });
-    child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-6000); });
-    child.once('error', error => { transcriptJobs.delete(operationId); finish({ error: error.code === 'ENOENT' ? 'Python не найден в PATH. Установите Python или добавьте его в PATH.' : (error.message || 'Не удалось запустить Python') }); });
-    child.once('close', async code => {
+    const finish = result => {
+      if (settled) return;
+      settled = true;
       transcriptJobs.delete(operationId);
-      if (job.canceled) { finish({ canceled: true }); return; }
-      if (code !== 0) { finish({ error: stderr || `Транскрипция завершилась с кодом ${code}` }); return; }
-      try {
-        const manifest = { ...sourceSignature(filePath, sourceStat), modelPath };
-        await writeFile(paths.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-        const result = await loadTranscript(filePath);
-        finish(result.error ? result : { success: true, ...result });
-      } catch (error) { finish({ error: error.message || 'Не удалось сохранить транскрипцию' }); }
+      lock.release().finally(() => resolve(result));
+    };
+    child.stderr?.on('data', chunk => { stderr = (stderr + chunk).slice(-6000); });
+    child.on('message', async message => {
+      if (message.progress && !event.sender.isDestroyed() && message.progress.total > 0) {
+        event.sender.send('folder-video:transcript-progress', { operationId, percent: Math.max(0, Math.min(100, Math.round(message.progress.current / message.progress.total * 100))) });
+      } else if (message.done) {
+        if (job.canceled) return finish({ canceled: true });
+        try {
+          await transcriptStore.write(filePath, sourceStat, message.done.segments, environment.modelPath);
+          const result = await loadTranscript(filePath);
+          finish(result.error ? result : { success: true, ...result });
+        } catch (error) { finish({ error: error.message || 'Не удалось сохранить транскрипцию' }); }
+      } else if (message.error) finish(job.canceled ? { canceled: true } : { error: message.error });
+    });
+    child.once('error', error => finish({ error: error.message || 'Не удалось запустить распознавание' }));
+    child.once('exit', code => {
+      // Сообщение done/error может прийти чуть позже выхода процесса: даём ему обработаться.
+      setTimeout(() => finish(job.canceled ? { canceled: true } : { error: stderr.trim() || `Распознавание завершилось с кодом ${code}. Проверьте библиотеку, модель и драйвер видеокарты.` }), 500);
     });
   });
 }
 
-function summaryPath(filePath) { return path.join(transcriptDirectory(), `${transcriptStem(filePath)}.summary.json`); }
+function summaryPath(filePath) { return transcriptStore.paths(filePath).summaryPath; }
 function transcriptHash(srt) { return createHash('sha256').update(srt).digest('hex'); }
 async function loadSummary(filePath) {
   const transcript = await loadTranscript(filePath);
@@ -578,9 +613,7 @@ async function loadSummary(filePath) {
   try {
     const saved = JSON.parse(await readFile(summaryPath(filePath), 'utf8'));
     const stat = await lstat(filePath);
-    const valid = isSameSource(saved, sourceSignature(filePath, stat))
-      && saved.transcriptHash === transcriptHash(transcript.srt)
-      && saved.model === appSettings.ai.model;
+    const valid = isSummaryFresh(saved, transcriptHash(transcript.srt));
     if (valid && (typeof saved.summary?.overview !== 'string' || !Array.isArray(saved.summary.topics)
       || saved.summary.topics.some(topic => typeof topic.title !== 'string' || !Number.isFinite(topic.start)))) {
       return { error: 'Сохранённая сводка повреждена. Создайте её заново.' };
@@ -644,7 +677,7 @@ async function generateSummary(filePath, controller) {
   const summary = normalizeSummary(raw, segments, allowed);
   if (controller.signal.aborted) throw new Error('Создание сводки отменено.');
   const stat = await lstat(filePath);
-  const record = { ...sourceSignature(filePath, stat), modelPath: appSettings.transcription?.modelPath || '', transcriptHash: transcriptHash(transcript.srt), model, summary };
+  const record = { ...sourceSignature(filePath, stat), transcriptHash: transcriptHash(transcript.srt), model, summary };
   const target = summaryPath(filePath);
   const temporary = `${target}.${process.pid}.tmp`;
   await mkdir(transcriptDirectory(), { recursive: true });
@@ -1381,7 +1414,7 @@ ipcMain.handle('folder-video:cut-undo', async (_event, undoId) => {
 ipcMain.handle('folder-video:cut-list-backups', async () => { try { return { backups: await cutUndoStore.list() }; } catch (error) { return { error: error.message }; } });
 ipcMain.handle('folder-video:cut-clear-backups', async () => { try { return { removed: await cutUndoStore.clear() }; } catch (error) { return { error: error.message }; } });
 
-ipcMain.handle('folder-video:transcript-load', async (_event, filePath) => loadTranscript(filePath));
+ipcMain.handle('folder-video:transcript-load', async (_event, filePath) => loadTranscript(filePath, true));
 ipcMain.handle('folder-video:transcript-start', async (event, filePath, operationId) => {
   if (typeof operationId !== 'string' || !operationId) return { error: 'Некорректная операция' };
   if (transcriptJobs.has(operationId)) return { error: 'Транскрибация уже выполняется' };
@@ -1451,6 +1484,14 @@ ipcMain.handle('folder-video:set-title', (event, folderPath) => {
   BrowserWindow.fromWebContents(event.sender)?.setTitle(title);
 });
 
+ipcMain.handle('folder-video:transcribe-env-status', () => environmentStatus(appSettings));
+ipcMain.handle('folder-video:transcribe-env-download', async (event, kind) => {
+  if (kind !== 'model' && kind !== 'library') return { error: 'Неизвестный вид загрузки' };
+  if (isDownloading()) return { error: 'Что-то уже скачивается' };
+  const result = await downloadEnvironment(appSettings, kind, percent => { if (!event.sender.isDestroyed()) event.sender.send('folder-video:transcribe-env-progress', { kind, percent }); });
+  return { ...result, status: environmentStatus(appSettings) };
+});
+ipcMain.handle('folder-video:transcribe-env-cancel', () => { cancelDownload(); return true; });
 ipcMain.handle('folder-video:get-app-info', () => ({ version: APP_VERSION }));
 ipcMain.handle('folder-video:check-update', () => checkForUpdate(true));
 ipcMain.handle('folder-video:get-update-state', () => updateState);
@@ -1488,6 +1529,7 @@ app.whenReady().then(async () => {
   openMetadataStore();
   openCutUndoStore();
   createWindow();
+  setTimeout(() => { offerLegacyTranscriptMigration().catch(() => {}); }, 1500);
   const updateTimer = setTimeout(() => { if (appSettings.autoUpdate) void checkForUpdate(false); }, 10000);
   updateTimer.unref();
   openLaunchTarget(process.argv);

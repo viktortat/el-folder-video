@@ -10,6 +10,7 @@
 
 - Electron Forge, Electron 30, vanilla HTML/CSS/JavaScript.
 - Пакетный менеджер и запуск скриптов — Bun; зависимости фиксируются в `bun.lock`.
+- Транскрипции, сводки и заметки лежат в общей папке `storage.transcriptDirectory` (по умолчанию `Documents\Transcripts`), общей с Окошком и YouTube Radar. Формат файлов определяет `docs/transcript-store.md` и `src/shared/transcript-store-core.js`; менять его только там и синхронно в Окошке и Radar, проверять на `tests/fixtures/transcript-store/`. Распознавание — `src/main/transcribe-worker.js` (koffi, без Python), окружение (`transcribe.dll`, модель) — `src/main/transcribe-env.js`, файлы хранилища и lock — `src/main/transcript-store.js`.
 - Метаданные видео хранятся в JSON-файлах по SHA-256 содержимого (`src/main/video-metadata-store.js`); `marked` — для Markdown-предпросмотра. В `package.json` `better-sqlite3` нет.
 - `src/main/main.js` — единственное место для Node.js API, файловой системы, Electron `shell` и нативных диалогов.
 - `src/preload/preload.js` — единственный мост между renderer и main через `contextBridge`.

@@ -5,7 +5,7 @@
   const notesCore = window.NotesCore;
   const thumbnailQueue = new ThumbnailQueue(2);
   const supported = "MP4, WebM, MOV, AVI, MKV, M4V, OGV";
-  const DEFAULT_SETTINGS = { version: 1, autoUpdate: true, theme: "dark", storage: { metadataDirectory: "", gitRepositoryUrl: "", obsidianInbox: "", transcriptDirectory: "" }, viewer: { columns: 3, seconds: 10, scroll: "center", panelWidth: 410 }, interface: { metadataCollapsed: false, gridCollapsed: false }, cut: { replaceOriginal: true }, transcription: { modelPath: "" }, ai: { model: "deepseek-flash", apiKey: "", keyConfigured: false, clearKey: false } };
+  const DEFAULT_SETTINGS = { version: 1, autoUpdate: true, theme: "dark", storage: { metadataDirectory: "", gitRepositoryUrl: "", obsidianInbox: "", transcriptDirectory: "" }, viewer: { columns: 3, seconds: 10, scroll: "center", panelWidth: 410 }, interface: { metadataCollapsed: false, gridCollapsed: false }, cut: { replaceOriginal: true }, transcription: { modelPath: "", environmentDirectory: "", legacyMigrationAsked: false }, ai: { model: "deepseek-flash", apiKey: "", keyConfigured: false, clearKey: false } };
   const SETTINGS_SECTIONS = [
     { id: "viewer", label: "Просмотр видео", hint: "Сетка кадров, временной шаг и прокрутка в плеере.", groups: ["Просмотр видео"], icon: "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z" },
     { id: "interface", label: "Интерфейс", hint: "Вид панелей при открытии видео.", groups: ["Интерфейс"], icon: "M3 4h18v16H3z M3 9h18 M9 9v11" },
@@ -20,8 +20,9 @@
     { group: "Хранилище", key: "storage.metadataDirectory", label: "Каталог метаданных", type: "text", hint: "JSON-файлы и template.html" },
     { group: "Хранилище", key: "storage.gitRepositoryUrl", label: "Git-репозиторий", type: "text", hint: "URL удалённого репозитория" },
     { group: "Хранилище", key: "storage.obsidianInbox", label: "Папка статей Obsidian", type: "text", hint: "Сюда кнопка в шапке панели сохраняет сводную статью по видео" },
-    { group: "Транскрибация", key: "storage.transcriptDirectory", label: "Папка транскрипций", type: "folder", hint: "Сюда сохраняются субтитры (.srt), сводки и заметки. Пустое значение — папка по умолчанию. Уже созданные файлы в новую папку не переносятся." },
-    { group: "Транскрибация", key: "transcription.modelPath", label: "Модель Parakeet TDT", type: "text", hint: "Путь к GGUF-файлу; пустое значение — поиск в кэше HuggingFace" },
+    { group: "Транскрибация", key: "storage.transcriptDirectory", label: "Папка транскрипций", type: "folder", hint: "Общая папка для Folder-video, Окошка и YouTube Radar: субтитры (.srt), сводки и заметки. Пустое значение — Документы\Transcripts. При смене папки приложение предложит перенести файлы." },
+    { group: "Транскрибация", key: "transcription.environmentDirectory", label: "Папка окружения распознавания", type: "folder", hint: "Общая для приложений: библиотека transcribe и модель. Пустое значение — %LOCALAPPDATA%\\transcribe-shared." },
+    { group: "Транскрибация", key: "transcription.modelPath", label: "Файл модели (необязательно)", type: "text", hint: "Путь к GGUF-файлу; пустое значение — модель из папки окружения или кэша HuggingFace" },
     { group: "Суммаризация", key: "ai.apiKey", label: "Ключ DeepSeek", type: "password", hint: "Текст транскрипции отправляется в DeepSeek. Ключ шифруется; пустое поле оставляет прежний." },
     { group: "Суммаризация", key: "ai.model", label: "Название модели", type: "text", hint: "По умолчанию deepseek-flash" },
     { group: "Суммаризация", key: "ai.clearKey", label: "Удалить сохранённый ключ", type: "checkbox" },
@@ -421,6 +422,11 @@
   });
   document.addEventListener("keydown", function(event) { if (event.key === "Escape") { if (state.favoritesOpen) closeFavorites(); if (state.recentVideosOpen) closeRecentVideos(); closeCtxMenu(); } }); document.addEventListener("click", function() { closeCtxMenu(); });
   applyTheme("dark", false); updateFavoritesButton(); updateRecentVideosButton();
+  window.folderVideo.onSettingsChanged(function(settings) {
+    state.settings = settings;
+    var settingsTab = state.tabs.find(function(item) { return item.type === "settings"; });
+    if (settingsTab && !settingsTab.dirty) { settingsTab.draft = clone(settings); if (active() === settingsTab) renderSettings(settingsTab); }
+  });
   const settingsReady = window.folderVideo.getSettings().then(function(result) {
     state.settings = result.settings;
     if (!result.hasConfig) {
@@ -765,6 +771,28 @@
   function settingsIconMarkup(section) {
     return '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + section.icon + '"></path></svg>';
   }
+  function setupTranscribeEnvironment() {
+    var status = $("#envStatus"), model = $("#envDownloadModel"), library = $("#envDownloadLibrary"), cancel = $("#envCancel");
+    var labels = { settings: "из настроек", environment: "из папки окружения", huggingface: "из кэша HuggingFace" };
+    function setBusy(busy) { model.disabled = busy; library.disabled = busy; cancel.hidden = !busy; }
+    async function refresh() {
+      var info = await window.folderVideo.getTranscribeEnvironment();
+      status.textContent = "Библиотека: " + (info.libraryFound ? "найдена" : "не найдена") + ". Модель: " + (info.modelFound ? "найдена (" + labels[info.modelSource] + ")" : "не найдена") + ". Состояние для сохранённых настроек.";
+    }
+    async function download(kind) {
+      setBusy(true); status.textContent = kind === "model" ? "Скачивание модели…" : "Скачивание библиотеки…";
+      var result = await window.folderVideo.downloadTranscribeEnvironment(kind);
+      setBusy(false);
+      if (result.error) notice(result.error); else if (result.success) notice(kind === "model" ? "Модель скачана" : "Библиотека скачана", true);
+      refresh();
+    }
+    if (state.envProgressOff) state.envProgressOff();
+    state.envProgressOff = window.folderVideo.onTranscribeEnvironmentProgress(function(progress) { if ($("#envStatus")) $("#envStatus").textContent = (progress.kind === "model" ? "Скачивание модели: " : "Скачивание библиотеки: ") + progress.percent + "%"; });
+    model.addEventListener("click", function() { download("model"); });
+    library.addEventListener("click", function() { download("library"); });
+    cancel.addEventListener("click", function() { window.folderVideo.cancelTranscribeEnvironment(); });
+    refresh();
+  }
   function renderSettings(tab) {
     var restoreTop = tab.settingsScrollTop || 0;
     var navigation = SETTINGS_SECTIONS.map(function(section) {
@@ -773,6 +801,7 @@
     var markup = SETTINGS_SECTIONS.map(function(section) {
       var rows = SETTINGS_FIELDS.filter(function(field) { return section.groups.includes(field.group); }).map(function(field) { return settingsFieldMarkup(field, tab); }).join("");
       if (section.id === "updates") rows += '<div class="settings-row"><div class="settings-label"><strong>Проверка версии</strong><small id="updateStatus" class="update-status" role="status" aria-live="polite"></small></div><div class="settings-control"><button id="checkUpdates" class="settings-reset" type="button" title="Проверить наличие новой версии Folder-video" aria-label="Проверить обновление Folder-video">Проверить обновление</button></div></div>';
+      if (section.id === "transcription") rows += '<div class="settings-row"><div class="settings-label"><strong>Окружение распознавания</strong><small id="envStatus" class="update-status" role="status" aria-live="polite">Проверка…</small></div><div class="settings-control"><button id="envDownloadModel" class="settings-reset" type="button" title="Скачать модель Parakeet TDT в папку окружения" aria-label="Скачать модель распознавания">Скачать модель</button> <button id="envDownloadLibrary" class="settings-reset" type="button" title="Скачать библиотеку transcribe в папку окружения" aria-label="Скачать библиотеку распознавания">Скачать библиотеку</button> <button id="envCancel" class="settings-reset" type="button" hidden title="Отменить скачивание" aria-label="Отменить скачивание">Отмена</button></div></div>';
       var backups = section.id === "cut" ? '<div class="settings-group"><header class="settings-card-heading"><h3>Бэкапы вырезки</h3></header><div id="cutBackups" class="cut-backups">Загрузка…</div></div>' : "";
       return '<section id="settings-' + section.id + '" class="settings-section" aria-labelledby="settings-title-' + section.id + '"><header class="settings-section-heading"><h2 id="settings-title-' + section.id + '">' + escapeHtml(section.label) + '</h2><p>' + escapeHtml(section.hint) + '</p></header><div class="settings-group">' + rows + '</div>' + backups + '</section>';
     }).join("");
@@ -808,6 +837,7 @@
     });
     $("#settingsForm").querySelectorAll("[data-setting]").forEach(function(control) { control.addEventListener(control.tagName === "INPUT" && control.type !== "checkbox" ? "input" : "change", function() { var field = SETTINGS_FIELDS.find(function(item) { return item.key === control.dataset.setting; }); var value = field.type === "checkbox" ? control.checked : field.type === "select" && typeof readSetting(tab.draft, field.key) === "number" ? Number(control.value) : control.value; writeSetting(tab.draft, field.key, value); tab.dirty = true; $("#settingsState").textContent = "Есть несохранённые изменения"; }); });
     $("#settingsForm").querySelectorAll("[data-browse]").forEach(function(button) { button.addEventListener("click", async function(event) { event.preventDefault(); var folder = await window.folderVideo.chooseFolder(); if (!folder) return; var input = $("#settingsForm").querySelector("input[data-setting=\"" + button.dataset.browse + "\"]"); input.value = folder; input.dispatchEvent(new Event("input")); }); });
+    setupTranscribeEnvironment();
     $("#resetSettings").addEventListener("click", async function() { if (!confirm("Сбросить настройки к значениям по умолчанию?")) return; var result = await window.folderVideo.getDefaultSettings(); tab.draft = result.settings; tab.dirty = true; renderSettings(tab); });
     $("#settingsForm").addEventListener("submit", function(event) { event.preventDefault(); saveSettingsTab(tab); });
     renderCutBackups();
@@ -846,6 +876,7 @@
   async function saveSettingsTab(tab) {
     var switchingDatabase = tab.draft.storage.metadataDirectory !== state.settings.storage.metadataDirectory;
     var changingSummaryModel = tab.draft.ai.model !== state.settings.ai.model;
+    var changingTranscriptFolder = tab.draft.storage.transcriptDirectory !== state.settings.storage.transcriptDirectory;
     var dirtyPlayers = state.tabs.filter(function(item) { return item.type === "player" && item.metadataDirty; });
     if (switchingDatabase && dirtyPlayers.length && !confirm("В открытых вкладках есть несохранённые метаданные. Сменить каталог без сохранения?")) return;
     var result = await window.folderVideo.saveSettings(tab.draft);
@@ -854,7 +885,9 @@
     tab.draft = clone(state.settings); tab.dirty = false;
     state.tabs.filter(function(item) { return item.type === "player" && (changingSummaryModel || !item.summaryData); }).forEach(function(item) { item.summaryStatus = null; if (changingSummaryModel) item.summaryData = null; });
     if (switchingDatabase) state.tabs.filter(function(item) { return item.type === "player"; }).forEach(function(item) { item.metadataStatus = "idle"; item.metadata = null; item.metadataDraft = null; item.metadataDirty = false; loadMetadata(item); });
-    render(); notice("Настройки сохранены", true);
+    if (changingTranscriptFolder) state.tabs.filter(function(item) { return item.type === "player" && item.transcriptStatus !== "running"; }).forEach(function(item) { item.transcriptStatus = null; item.transcriptSegments = []; item.transcriptFromYoutube = false; item.summaryStatus = null; item.summaryData = null; });
+    var move = result.transcriptMove;
+    render(); notice(move && !move.declined ? "Настройки сохранены. Перенесено файлов: " + move.moved + (move.skipped ? ", уже были в папке: " + move.skipped : "") + (move.failed ? ", ошибок: " + move.failed : "") : "Настройки сохранены", true);
   }
 
   async function syncMetadata() { var result = await window.folderVideo.syncMetadata(); if (result.success) notice("Метаданные синхронизированы", true); else notice((result.error || "Ошибка синхронизации") + (result.details ? ": " + result.details.slice(0, 500) : "")); }
@@ -1518,7 +1551,7 @@
     if (tab.transcriptStatus === "running") { host.innerHTML = "<p class=\"transcript-empty is-running\">Транскрибация выполняется…<strong>" + Math.round(tab.transcriptProgress || 0) + "%</strong></p>"; return; }
     if (tab.transcriptError) { host.innerHTML = "<p class=\"transcript-empty is-error\">" + escapeHtml(tab.transcriptError) + "</p>"; return; }
     if (!tab.transcriptSegments || !tab.transcriptSegments.length) { host.innerHTML = "<p class=\"transcript-empty\">Транскрипции пока нет.<br>Нажмите кнопку транскрибации в шапке панели.</p>"; return; }
-    host.innerHTML = tab.transcriptSegments.map(function(segment, index) { return "<button class=\"transcript-segment\" data-index=\"" + index + "\" data-start=\"" + segment.start + "\" data-end=\"" + segment.end + "\"><time>" + formatTime(segment.start) + "</time><span>" + escapeHtml(segment.text) + "</span></button>"; }).join("");
+    host.innerHTML = (tab.transcriptFromYoutube ? "<p class=\"transcript-note\" title=\"Файл yt-<id>.srt из общей папки; собственную транскрипцию видео можно создать кнопкой в шапке панели\">Транскрипция ролика YouTube (только чтение)</p>" : "") + tab.transcriptSegments.map(function(segment, index) { return "<button class=\"transcript-segment\" data-index=\"" + index + "\" data-start=\"" + segment.start + "\" data-end=\"" + segment.end + "\"><time>" + formatTime(segment.start) + "</time><span>" + escapeHtml(segment.text) + "</span></button>"; }).join("");
     host.querySelectorAll(".transcript-segment").forEach(function(button) { button.addEventListener("click", function() { player.currentTime = Number(button.dataset.start); tab.currentTime = player.currentTime; player.play().catch(function() {}); updateActiveTranscript(player.currentTime, tab, true); focusPlaybackControl(); }); });
     updateActiveTranscript(player.currentTime, tab, true);
   }
@@ -1528,7 +1561,7 @@
     var result = await window.folderVideo.loadTranscript(filePath);
     if (!state.tabs.includes(tab) || tab.video.path !== filePath) return;
     if (result.error) { tab.transcriptError = result.error; tab.transcriptStatus = "error"; }
-    else { tab.transcriptSegments = result.available ? parseSrt(result.srt) : []; tab.transcriptStatus = "ready"; tab.transcriptStale = Boolean(result.stale); }
+    else { tab.transcriptSegments = result.available ? parseSrt(result.srt) : []; tab.transcriptStatus = "ready"; tab.transcriptStale = Boolean(result.stale); tab.transcriptFromYoutube = Boolean(result.fromYoutube); }
     renderTranscriptPanel(tab, $("#player")); updateTranscriptControls(tab);
     if (result.available && tab.transcriptSegments.length) loadPlayerSummary(tab);
   }
