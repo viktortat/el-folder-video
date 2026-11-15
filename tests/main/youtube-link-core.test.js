@@ -59,3 +59,21 @@ test('запись свойства поддерживается только д
   assert.equal(core.isWritableExtension('.MP4'), true);
   assert.equal(core.isWritableExtension('.mkv'), false);
 });
+
+test('дата публикации берётся из вывода yt-dlp', () => {
+  assert.equal(core.parseYtDlpUploadDate('{"id":"dQw4w9WgXcQ","upload_date":"20251115"}\n'), '2025-11-15');
+  assert.equal(core.parseYtDlpUploadDate('предупреждение\n{"id":"x","release_date":"20240229"}'), '2024-02-29');
+  assert.equal(core.parseYtDlpUploadDate('{"timestamp":1763164800}'), '2025-11-14');
+  assert.equal(core.parseYtDlpUploadDate('{"timestamp":1256490000,"upload_date":"20091025"}'), '2009-10-25');
+  assert.equal(core.parseYtDlpUploadDate('{"timestamp":1256451600,"upload_date":"20091025"}'), '2009-10-24');
+  assert.equal(core.parseYtDlpUploadDate('{"upload_date":null}'), '');
+  assert.equal(core.parseYtDlpUploadDate(''), '');
+});
+
+test('дата публикации берётся со страницы ролика', () => {
+  assert.equal(core.parsePageDate('<meta itemprop="datePublished" content="2025-11-15T08:00:12-08:00">'), '2025-11-15');
+  assert.equal(core.parsePageDate('<meta content="2023-01-31" itemprop="datePublished">'), '2023-01-31');
+  assert.equal(core.parsePageDate('{"microformat":{"playerMicroformatRenderer":{"publishDate":"2022-07-04T01:02:03-07:00"}}}'), '2022-07-04');
+  assert.equal(core.parsePageDate('{"uploadDate":"2021-12-25"}'), '2021-12-25');
+  assert.equal(core.parsePageDate('<html></html>'), '');
+});

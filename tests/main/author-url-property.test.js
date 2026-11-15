@@ -5,7 +5,7 @@ const { readFileSync } = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { readAuthorUrl, writeAuthorUrl } = require('../../src/main/author-url-property');
+const { readAuthorUrl, writeAuthorUrl, writePublishedDate } = require('../../src/main/author-url-property');
 
 function windowsProperty(file, mode, url = '') {
   // Независимый эталон: Windows разрешает каноническое имя, без номера свойства из приложения.
@@ -95,4 +95,27 @@ test('Windows: ссылка автора из Проводника читает�
     assert.equal(after.birthtimeMs, before.birthtimeMs);
     assert.equal(after.mtimeMs, before.mtimeMs);
   }
+});
+
+test('Windows: дата публикации пишется в «Дату выпуска» вместе со ссылкой и отдельно, даты файла не меняются', { skip: process.platform !== 'win32' }, async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'fv-published-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 30 }));
+  const file = path.join(root, 'Урок.mp4');
+  execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=black:s=32x32:r=1', '-t', '1', '-c:v', 'libx264', file], { windowsHide: true, timeout: 15000 });
+  assert.equal((await readAuthorUrl(file)).published, '');
+  const url = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
+  const before = await fs.stat(file);
+  const first = await writeAuthorUrl(file, url, '2025-11-15');
+  assert.equal(first.url, url);
+  assert.equal(first.published, '2025-11-15');
+  assert.equal(first.datesIntact, true);
+  assert.deepEqual(await readAuthorUrl(file), { supported: true, url, published: '2025-11-15' });
+  const second = await writePublishedDate(file, '2024-02-29');
+  assert.equal(second.url, url);
+  assert.equal(second.published, '2024-02-29');
+  assert.equal(second.datesIntact, true);
+  await assert.rejects(writePublishedDate(file, 'вчера'));
+  const after = await fs.stat(file);
+  assert.equal(after.birthtimeMs, before.birthtimeMs);
+  assert.equal(after.mtimeMs, before.mtimeMs);
 });

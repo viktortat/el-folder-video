@@ -36,7 +36,7 @@
   const state = {
     folderPath: "", files: [], skipped: 0, recursive: false, hideEmptyFiles: false, recentDaysEnabled: localStorage.getItem("folder-video-recent-days-enabled") === "true", recentDays: normalizeRecentDays(localStorage.getItem("folder-video-recent-days")), filterText: "", sort: "date", asc: false, page: 1, pageSize: 10,
     tabs: [{ id: "folder", type: "folder", label: "Видео" }], activeTab: "folder", cutJob: null, cutUndo: [], cutPreview: null,
-    stripCache: new Map(), stripPending: new Map(), frameCache: new Map(), favoriteThumbnailCache: new Map(), durationCache: new Map(), youtubeSourceCache: new Map(), youtubeBusy: new Set(), captureVideos: new Map(), task: 0, thumbnailGeneration: 0, thumbnailPriority: 0,
+    stripCache: new Map(), stripPending: new Map(), frameCache: new Map(), favoriteThumbnailCache: new Map(), durationCache: new Map(), youtubeSourceCache: new Map(), youtubeDateTried: new Set(), youtubeBusy: new Set(), captureVideos: new Map(), task: 0, thumbnailGeneration: 0, thumbnailPriority: 0,
     recentFolders: JSON.parse(localStorage.getItem("folder-video-recent") || "[]"),
     pinnedFolders: JSON.parse(localStorage.getItem("folder-video-pinned") || "[]"),
     recentMoveFolders: (function() { try { var list = JSON.parse(localStorage.getItem("folder-video-recent-move-folders") || "[]"); return Array.isArray(list) ? list.filter(function(item) { return typeof item === "string" && item; }).slice(0, 5) : []; } catch (_) { return []; } })(),
@@ -615,9 +615,22 @@
     if (!youtubeWritable(video.path)) return { mode: "unsupported" };
     return state.youtubeSourceCache.get(youtubeSourceKey(video)) || { mode: "loading" };
   }
+  // Дата публикации на YouTube справа от счётчика времени: «15 нояб. 2025 г.», в подсказке — «3 месяца назад».
+  function applyPublishedDate(video) {
+    var element = $("#publishedDate"); if (!element) return;
+    var cached = state.youtubeSourceCache.get(youtubeSourceKey(video));
+    var published = cached && cached.mode === "linked" ? cached.published : "";
+    var text = published && window.PublishedDateCore ? window.PublishedDateCore.formatPublishedDate(published) : "";
+    element.hidden = !text; element.textContent = text;
+    if (!text) { element.removeAttribute("title"); element.removeAttribute("aria-label"); return; }
+    var relative = window.PublishedDateCore.relativePublishedDate(published);
+    element.title = "Дата публикации на YouTube · " + relative;
+    element.setAttribute("aria-label", "Дата публикации на YouTube: " + text + ", " + relative);
+  }
   function applyYoutubeButton(video) {
     var button = $("#playerYoutube"), tab = active();
     if (!button || !tab || tab.type !== "player" || tab.video.path !== video.path) return;
+    applyPublishedDate(video);
     var info = currentYoutubeInfo(video), title;
     if (info.mode === "linked") title = "Открыть исходник на YouTube";
     else if (info.mode === "none") title = "Найти исходник на YouTube и записать ссылку в свойства файла";
@@ -634,9 +647,21 @@
     if (youtubeWritable(video.path) && !state.youtubeSourceCache.has(youtubeSourceKey(video))) {
       var result = await window.folderVideo.readYoutubeSource(video.path);
       state.youtubeSourceCache.set(youtubeSourceKey(video), result && !result.error
-        ? (result.url ? { mode: "linked", url: result.url } : { mode: "none" })
+        ? (result.url ? { mode: "linked", url: result.url, published: result.published || "" } : { mode: "none" })
         : { mode: "error", message: result && result.error ? result.error : "нет ответа" });
     }
+    applyYoutubeButton(video);
+    fetchMissingPublishedDate(video);
+  }
+  // Ссылка записана, а даты публикации нет: один раз на файл за сеанс тихо узнаём её и записываем в свойство.
+  async function fetchMissingPublishedDate(video) {
+    var key = youtubeSourceKey(video), info = state.youtubeSourceCache.get(key);
+    if (!info || info.mode !== "linked" || info.published || state.youtubeDateTried.has(key) || state.youtubeBusy.has(video.path)) return;
+    state.youtubeDateTried.add(key);
+    var result = await window.folderVideo.fetchYoutubeDate(video.path, info.url);
+    if (!result || result.error || !result.published) return;
+    var current = state.youtubeSourceCache.get(key);
+    if (current && current.mode === "linked" && current.url === info.url) state.youtubeSourceCache.set(key, { mode: "linked", url: info.url, published: result.published });
     applyYoutubeButton(video);
   }
   async function saveYoutubeSource(video, url) {
@@ -644,7 +669,8 @@
     var result = await window.folderVideo.writeYoutubeSource(video.path, url);
     state.youtubeBusy.delete(video.path);
     if (!result || result.error) { notice("Не удалось записать ссылку: " + (result && result.error ? result.error : "нет ответа")); applyYoutubeButton(video); return; }
-    state.youtubeSourceCache.set(youtubeSourceKey(video), { mode: "linked", url: result.url });
+    state.youtubeSourceCache.set(youtubeSourceKey(video), { mode: "linked", url: result.url, published: result.published || "" });
+    state.youtubeDateTried.add(youtubeSourceKey(video));
     notice(result.warning ? "Ссылка записана. " + result.warning : "Ссылка на YouTube записана в свойства файла", !result.warning);
     applyYoutubeButton(video);
   }
@@ -669,7 +695,7 @@
     overlay.querySelectorAll("[data-save]").forEach(function(button) { button.addEventListener("click", function() { var candidate = search.candidates[Number(button.dataset.save)]; closeYoutubePicker(); saveYoutubeSource(video, candidate.url); }); });
   }
   async function findYoutubeSource(video, player) {
-    if (!window.confirm("Искать исходник на YouTube по названию файла?\n\n" + video.name + "\n\nНазвание уйдёт в сеть (YouTube). Найденная ссылка будет записана в свойство «URL-адрес автора»; даты создания и изменения файла не изменятся.")) return;
+    if (!window.confirm("Искать исходник на YouTube по названию файла?\n\n" + video.name + "\n\nНазвание уйдёт в сеть (YouTube). Найденная ссылка и дата публикации ролика будут записаны в свойства файла («URL-адрес автора» и «Дата выпуска»); даты создания и изменения файла не изменятся.")) return;
     var fileDuration = player && Number.isFinite(player.duration) ? player.duration : NaN;
     state.youtubeBusy.add(video.path); applyYoutubeButton(video);
     var search = await window.folderVideo.searchYoutubeSource(video.path, fileDuration);
@@ -1686,7 +1712,14 @@
     playbackTime.className = "playback-time";
     playbackTime.title = "Текущее время / длительность";
     playbackTime.setAttribute("aria-label", "Текущее время и длительность видео");
-    $(".video-switcher").prepend(playbackTime);
+    var publishedDate = document.createElement("span");
+    publishedDate.id = "publishedDate";
+    publishedDate.className = "published-date";
+    publishedDate.hidden = true;
+    var playbackInfo = document.createElement("div");
+    playbackInfo.className = "playback-info";
+    playbackInfo.append(playbackTime, publishedDate);
+    $(".video-switcher").prepend(playbackInfo);
     function updatePlaybackTime() { playbackTime.textContent = formatTime(player.currentTime || 0) + " / " + formatTime(player.duration); }
     updatePlaybackTime();
     ["loadedmetadata", "durationchange", "timeupdate", "seeked", "emptied"].forEach(function(name) { player.addEventListener(name, updatePlaybackTime); });

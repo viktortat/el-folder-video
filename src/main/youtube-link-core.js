@@ -3,6 +3,8 @@
 // Чистая логика поиска исходника на YouTube: очистка названия, разбор выдачи, выбор кандидата.
 // Без Node.js-API: сеть, yt-dlp и запись свойства файла живут в main.js.
 
+const { normalizePublishedDate } = require('../shared/published-date-core');
+
 const AUTO_PICK_TOLERANCE_SECONDS = 2;
 const MAX_CANDIDATES = 5;
 const WRITABLE_EXTENSIONS = new Set(['.mp4', '.m4v', '.mov']);
@@ -127,11 +129,46 @@ function pickAutoCandidate(candidates, durationSeconds) {
   return best && bestDiff <= AUTO_PICK_TOLERANCE_SECONDS ? best : null;
 }
 
+// YouTube показывает дату публикации по тихоокеанскому времени, а yt-dlp в upload_date отдаёт UTC (разница до суток),
+// поэтому точный timestamp переводится в календарный день Pacific.
+const PACIFIC_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' });
+
+// Вывод `yt-dlp --dump-json <url>` (одна JSON-строка) -> "YYYY-MM-DD" или "".
+function parseYtDlpUploadDate(output) {
+  const lines = String(output || '').split(/\r?\n/).filter(line => line.trim());
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try {
+      const item = JSON.parse(lines[index]);
+      const fromTimestamp = Number.isFinite(item.timestamp) ? normalizePublishedDate(PACIFIC_DAY.format(new Date(item.timestamp * 1000))) : '';
+      const date = fromTimestamp || normalizePublishedDate(item.upload_date) || normalizePublishedDate(item.release_date);
+      if (date) return date;
+    } catch { /* не JSON — смотрим предыдущую строку */ }
+  }
+  return '';
+}
+
+// Страница ролика -> "YYYY-MM-DD" или "" (микроразметка, затем данные плеера).
+function parsePageDate(html) {
+  const text = String(html || '');
+  const patterns = [
+    /<meta[^>]+itemprop="datePublished"[^>]+content="([^"]+)"/,
+    /<meta[^>]+content="([^"]+)"[^>]+itemprop="datePublished"/,
+    /"publishDate":"([^"]+)"/,
+    /"uploadDate":"([^"]+)"/
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+    const date = match ? normalizePublishedDate(match[1]) : '';
+    if (date) return date;
+  }
+  return '';
+}
+
 function isWritableExtension(extension) { return WRITABLE_EXTENSIONS.has(String(extension || '').toLowerCase()); }
 
 const youtubeLinkCore = {
   AUTO_PICK_TOLERANCE_SECONDS, MAX_CANDIDATES, cleanSearchTitle, canonicalUrl, isVideoId, isYouTubeVideoUrl, parseClockDuration,
-  parseSearchHtml, parseYtDlpOutput, pickAutoCandidate, isWritableExtension
+  parseSearchHtml, parseYtDlpOutput, parseYtDlpUploadDate, parsePageDate, pickAutoCandidate, isWritableExtension
 };
 if (typeof module !== 'undefined' && module.exports) module.exports = youtubeLinkCore;
 else globalThis.YoutubeLinkCore = youtubeLinkCore;

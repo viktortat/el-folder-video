@@ -18,7 +18,7 @@ const { createTranscriptStore } = require('./transcript-store');
 const { environmentStatus, environmentDirectory, downloadEnvironment, cancelDownload, isDownloading } = require('./transcribe-env');
 const { isSummaryFresh } = require('../shared/transcript-store-core');
 const youtubeLink = require('./youtube-link-core');
-const { readAuthorUrl, writeAuthorUrl } = require('./author-url-property');
+const { readAuthorUrl, writeAuthorUrl, writePublishedDate } = require('./author-url-property');
 const { PeakCollector, SAMPLE_RATE, BINS_PER_SECOND } = require('../shared/waveform-core');
 const { RELEASES_API, compareVersions, latestRelease } = require('./update-core');
 const { srtSegments, transcriptBatches, normalizeSummary, FRAME_COUNT, frameTimes, parseVideoLink, parseRegValue, playerLaunch, safeNoteName, buildObsidianArticle, buildObsidianAddendum } = require('./summary-core');
@@ -1047,12 +1047,28 @@ async function searchYouTube(query) {
     const candidates = youtubeLink.parseYtDlpOutput(await runSearchTool('yt-dlp', ['--flat-playlist', '--dump-json', '--no-warnings', 'ytsearch' + youtubeLink.MAX_CANDIDATES + ':' + query]));
     if (candidates.length) return candidates;
   } catch { /* yt-dlp нет в PATH или он не справился — разбираем страницу поиска */ }
-  const response = await fetch('https://www.youtube.com/results?hl=ru&search_query=' + encodeURIComponent(query), {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36', 'Accept-Language': 'ru,en;q=0.8', Cookie: 'CONSENT=YES+1; SOCS=CAI' },
-    signal: AbortSignal.timeout(20000)
-  });
+  const response = await fetch('https://www.youtube.com/results?hl=ru&search_query=' + encodeURIComponent(query), { headers: YOUTUBE_PAGE_HEADERS, signal: AbortSignal.timeout(20000) });
   if (!response.ok) throw new Error('YouTube ответил кодом ' + response.status);
   return youtubeLink.parseSearchHtml(await response.text());
+}
+
+const YOUTUBE_PAGE_HEADERS = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36', 'Accept-Language': 'ru,en;q=0.8', Cookie: 'CONSENT=YES+1; SOCS=CAI' };
+
+// Дата публикации ролика ("YYYY-MM-DD" или ""): сначала yt-dlp, при неудаче — страница ролика.
+async function fetchPublishedDate(url) {
+  try {
+    const date = youtubeLink.parseYtDlpUploadDate(await runSearchTool('yt-dlp', ['--dump-json', '--skip-download', '--no-playlist', '--no-warnings', url]));
+    if (date) return date;
+  } catch { /* yt-dlp нет в PATH или он не справился — разбираем страницу ролика */ }
+  try {
+    const response = await fetch(url, { headers: YOUTUBE_PAGE_HEADERS, signal: AbortSignal.timeout(20000) });
+    return response.ok ? youtubeLink.parsePageDate(await response.text()) : '';
+  } catch { return ''; }
+}
+
+// Копия даты в JSON-метаданных по хэшу содержимого; хэш считается в фоне и не задерживает ответ интерфейсу.
+function storePublishedDate(filePath, date, create) {
+  hashFile(filePath).then(hash => metadataStore.setPublishedAt(hash, path.basename(filePath), date, { create })).catch(() => {});
 }
 
 ipcMain.handle('folder-video:youtube-read', async (_event, filePath) => {
@@ -1060,7 +1076,7 @@ ipcMain.handle('folder-video:youtube-read', async (_event, filePath) => {
     if (!isSupportedVideoPath(filePath)) return { error: 'Неподдерживаемый файл' };
     if (!youtubeLink.isWritableExtension(path.extname(filePath))) return { supported: false, url: '' };
     const result = await readAuthorUrl(filePath);
-    return { supported: result.supported, url: youtubeLink.isYouTubeVideoUrl(result.url) ? result.url : '', rawUrl: result.url };
+    return { supported: result.supported, url: youtubeLink.isYouTubeVideoUrl(result.url) ? result.url : '', rawUrl: result.url, published: result.published || '' };
   } catch (error) { return { error: error.message }; }
 });
 ipcMain.handle('folder-video:youtube-search', async (_event, filePath, durationSeconds) => {
@@ -1076,8 +1092,25 @@ ipcMain.handle('folder-video:youtube-write', async (_event, filePath, url) => {
   try {
     if (!isSupportedVideoPath(filePath) || !youtubeLink.isWritableExtension(path.extname(filePath))) return { error: 'Формат не поддерживает запись свойства' };
     if (!youtubeLink.isYouTubeVideoUrl(url)) return { error: 'Некорректная ссылка YouTube' };
-    const result = await writeAuthorUrl(filePath, url);
-    return { url: result.url, warning: result.datesIntact ? '' : 'Не удалось полностью сохранить даты файла' };
+    const published = await fetchPublishedDate(url);
+    const result = await writeAuthorUrl(filePath, url, published);
+    if (published) storePublishedDate(filePath, published, true);
+    const warnings = [];
+    if (!published) warnings.push('Дату публикации получить не удалось');
+    if (!result.datesIntact) warnings.push('Не удалось полностью сохранить даты файла');
+    return { url: result.url, published: result.published || '', warning: warnings.join('. ') };
+  } catch (error) { return { error: error.message }; }
+});
+// Дозапрос даты публикации для видео, у которого ссылка уже записана (дата файла не меняется).
+ipcMain.handle('folder-video:youtube-date', async (_event, filePath, url) => {
+  try {
+    if (!isSupportedVideoPath(filePath) || !youtubeLink.isWritableExtension(path.extname(filePath))) return { error: 'Формат не поддерживает запись свойства' };
+    if (!youtubeLink.isYouTubeVideoUrl(url)) return { error: 'Некорректная ссылка YouTube' };
+    const published = await fetchPublishedDate(url);
+    if (!published) return { published: '' };
+    const result = await writePublishedDate(filePath, published);
+    storePublishedDate(filePath, published, false);
+    return { published: result.published || '', warning: result.datesIntact ? '' : 'Не удалось полностью сохранить даты файла' };
   } catch (error) { return { error: error.message }; }
 });
 ipcMain.handle('folder-video:youtube-open', async (_event, url) => {

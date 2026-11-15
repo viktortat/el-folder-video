@@ -28,3 +28,17 @@ test('перенос не затирает уже существующую за�
   assert.equal((await metadata.copy('ccc', 'ddd', 'c.mp4')).title, 'Новое');
   assert.equal(await metadata.copy('нет', 'eee', 'c.mp4'), null);
 });
+
+test('дата публикации не затирается формой и не создаёт запись без просьбы', async t => {
+  const metadata = await store(t);
+  assert.equal(await metadata.setPublishedAt('f00', 'v.mp4', '20251115'), null);
+  assert.equal((await metadata.load('f00', 'v.mp4')).createdAt, null);
+  const created = await metadata.setPublishedAt('f00', 'v.mp4', '2025-11-15', { create: true });
+  assert.equal(created.publishedAt, '2025-11-15');
+  const saved = await metadata.save({ contentHash: 'f00', originalFileName: 'v.mp4', title: 'Новое имя', tags: [] });
+  assert.equal(saved.publishedAt, '2025-11-15');
+  const updated = await metadata.setPublishedAt('f00', 'v.mp4', '2024-02-29');
+  assert.equal(updated.publishedAt, '2024-02-29');
+  assert.equal((await metadata.copy('f00', 'f01', 'v.mp4')).publishedAt, '2024-02-29');
+  assert.equal(await metadata.setPublishedAt('f00', 'v.mp4', 'мусор'), null);
+});
