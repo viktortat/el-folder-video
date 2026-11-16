@@ -15,7 +15,7 @@ const { reencodeCodecArguments } = require('../shared/cut-core');
 const { probeDuration, listKeyframes, planCut, executeCut } = require('./cut-ffmpeg');
 const { shiftNotes } = require('../shared/notes-core');
 const { createTranscriptStore } = require('./transcript-store');
-const { environmentStatus, environmentDirectory, downloadEnvironment, cancelDownload, isDownloading } = require('./transcribe-env');
+const { environmentStatus, listModels, environmentDirectory, downloadEnvironment, cancelDownload, isDownloading } = require('./transcribe-env');
 const { isSummaryFresh } = require('../shared/transcript-store-core');
 const youtubeLink = require('./youtube-link-core');
 const { readAuthorUrl, writeAuthorUrl, writePublishedDate } = require('./author-url-property');
@@ -1519,6 +1519,11 @@ ipcMain.handle('folder-video:set-title', (event, folderPath) => {
 });
 
 ipcMain.handle('folder-video:transcribe-env-status', () => environmentStatus(appSettings));
+ipcMain.handle('folder-video:transcribe-model-list', () => listModels(appSettings));
+ipcMain.handle('folder-video:choose-model-file', async () => {
+  const result = await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: 'Модель GGUF', extensions: ['gguf'] }] });
+  return result.canceled ? null : result.filePaths[0];
+});
 ipcMain.handle('folder-video:transcribe-env-download', async (event, kind) => {
   if (kind !== 'model' && kind !== 'library') return { error: 'Неизвестный вид загрузки' };
   if (isDownloading()) return { error: 'Что-то уже скачивается' };

@@ -63,6 +63,8 @@ contextBridge.exposeInMainWorld('folderVideo', {
     return () => ipcRenderer.removeListener('folder-video:transcript-progress', listener);
   },
   getTranscribeEnvironment: () => ipcRenderer.invoke('folder-video:transcribe-env-status'),
+  listTranscribeModels: () => ipcRenderer.invoke('folder-video:transcribe-model-list'),
+  chooseModelFile: () => ipcRenderer.invoke('folder-video:choose-model-file'),
   downloadTranscribeEnvironment: kind => ipcRenderer.invoke('folder-video:transcribe-env-download', kind),
   cancelTranscribeEnvironment: () => ipcRenderer.invoke('folder-video:transcribe-env-cancel'),
   onTranscribeEnvironmentProgress: callback => {

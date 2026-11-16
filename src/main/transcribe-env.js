@@ -57,6 +57,21 @@ function environmentModel(settings) {
   } catch { return ''; }
 }
 
+// Все найденные модели: папка окружения и кэш HuggingFace. Для выбора в настройках.
+function listModels(settings) {
+  const found = [];
+  const directory = modelsDirectory(settings);
+  try {
+    for (const name of fs.readdirSync(directory).sort()) {
+      const file = path.join(directory, name);
+      if (name.toLowerCase().endsWith('.gguf') && isFile(file)) found.push({ path: file, name, source: 'environment' });
+    }
+  } catch { /* папки моделей нет */ }
+  const cached = huggingFaceModel();
+  if (cached) found.push({ path: cached, name: path.basename(cached), source: 'huggingface' });
+  return found;
+}
+
 function libraryPath(settings) {
   for (const candidate of [path.join(environmentDirectory(settings), DLL_REL), bundledLibrary()]) if (isFile(candidate)) return candidate;
   return '';
@@ -152,4 +167,4 @@ async function downloadEnvironment(settings, kind, onProgress) {
   }
 }
 
-module.exports = { environmentDirectory, defaultEnvironmentDirectory, environmentStatus, downloadEnvironment, cancelDownload, isDownloading, DLL_REL, MODEL_FILE };
+module.exports = { environmentDirectory, defaultEnvironmentDirectory, environmentStatus, listModels, downloadEnvironment, cancelDownload, isDownloading, DLL_REL, MODEL_FILE };

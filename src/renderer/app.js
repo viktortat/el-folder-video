@@ -22,7 +22,7 @@
     { group: "Хранилище", key: "storage.obsidianInbox", label: "Папка статей Obsidian", type: "text", hint: "Сюда кнопка в шапке панели сохраняет сводную статью по видео" },
     { group: "Транскрибация", key: "storage.transcriptDirectory", label: "Папка транскрипций", type: "folder", hint: "Общая папка для Folder-video, Окошка и YouTube Radar: субтитры (.srt), сводки и заметки. Пустое значение — Документы\Transcripts. При смене папки приложение предложит перенести файлы." },
     { group: "Транскрибация", key: "transcription.environmentDirectory", label: "Папка окружения распознавания", type: "folder", hint: "Общая для приложений: библиотека transcribe и модель. Пустое значение — %LOCALAPPDATA%\\transcribe-shared." },
-    { group: "Транскрибация", key: "transcription.modelPath", label: "Файл модели (необязательно)", type: "text", hint: "Путь к GGUF-файлу; пустое значение — модель из папки окружения или кэша HuggingFace" },
+    { group: "Транскрибация", key: "transcription.modelPath", label: "Файл модели (необязательно)", type: "file", hint: "Путь к GGUF-файлу; пустое значение — модель из папки окружения или кэша HuggingFace" },
     { group: "Суммаризация", key: "ai.apiKey", label: "Ключ DeepSeek", type: "password", hint: "Текст транскрипции отправляется в DeepSeek. Ключ шифруется; пустое поле оставляет прежний." },
     { group: "Суммаризация", key: "ai.model", label: "Название модели", type: "text", hint: "По умолчанию deepseek-flash" },
     { group: "Суммаризация", key: "ai.clearKey", label: "Удалить сохранённый ключ", type: "checkbox" },
@@ -785,6 +785,7 @@
     var attributes = ' id="' + id + '" data-setting="' + field.key + '" title="' + escapeHtml(field.label) + '"' + (field.hint ? ' aria-describedby="' + id + '-hint"' : "");
     if (field.type === "password") return '<input' + attributes + ' type="password" autocomplete="off" placeholder="' + (state.settings.ai.keyConfigured ? "Ключ сохранён" : "Введите API-ключ") + '" value="' + escapeHtml(value || "") + '" />';
     if (field.type === "folder") return '<span class="settings-folder"><input' + attributes + ' type="text" value="' + escapeHtml(value) + '" /><button type="button" class="settings-reset" data-browse="' + field.key + '" title="Выбрать папку" aria-label="Выбрать папку: ' + escapeHtml(field.label) + '">Обзор…</button></span>';
+    if (field.type === "file") return '<span class="settings-folder"><input' + attributes + ' type="text" value="' + escapeHtml(value) + '" /><button type="button" class="settings-reset" data-browse-file="' + field.key + '" title="Выбрать файл модели GGUF" aria-label="Выбрать файл: ' + escapeHtml(field.label) + '">Обзор…</button></span>';
     if (field.type === "text") return '<input' + attributes + ' type="text" value="' + escapeHtml(value) + '" />';
     if (field.type === "checkbox") return '<span class="settings-switch"><input' + attributes + ' type="checkbox"' + (value ? " checked" : "") + '/><span aria-hidden="true"></span></span>';
     var options = field.options.map(function(option) { var item = typeof option === "object" ? option : { value: option, label: String(option) + (field.suffix ? " " + field.suffix : "") }; return "<option value=\"" + escapeHtml(item.value) + "\"" + (String(item.value) === String(value) ? " selected" : "") + ">" + escapeHtml(item.label) + "</option>"; }).join("");
@@ -803,7 +804,7 @@
     function setBusy(busy) { model.disabled = busy; library.disabled = busy; cancel.hidden = !busy; }
     async function refresh() {
       var info = await window.folderVideo.getTranscribeEnvironment();
-      status.textContent = "Библиотека: " + (info.libraryFound ? "найдена" : "не найдена") + ". Модель: " + (info.modelFound ? "найдена (" + labels[info.modelSource] + ")" : "не найдена") + ". Состояние для сохранённых настроек.";
+      status.textContent = "Библиотека: " + (info.libraryFound ? "найдена" : "не найдена") + ". Модель: " + (info.modelFound ? "найдена (" + labels[info.modelSource] + "): " + info.modelPath : "не найдена") + ". Состояние для сохранённых настроек.";
     }
     async function download(kind) {
       setBusy(true); status.textContent = kind === "model" ? "Скачивание модели…" : "Скачивание библиотеки…";
@@ -825,7 +826,7 @@
       return '<a href="#settings-' + section.id + '" data-settings-section="' + section.id + '" title="' + escapeHtml(section.label) + '">' + settingsIconMarkup(section) + '<span>' + escapeHtml(section.label) + '</span></a>';
     }).join("");
     var markup = SETTINGS_SECTIONS.map(function(section) {
-      var rows = SETTINGS_FIELDS.filter(function(field) { return section.groups.includes(field.group); }).map(function(field) { return settingsFieldMarkup(field, tab); }).join("");
+      var rows = SETTINGS_FIELDS.filter(function(field) { return section.groups.includes(field.group); }).map(function(field) { return (field.key === "transcription.modelPath" ? '<div class="settings-row"><label class="settings-label" for="modelPicker"><strong>Модель распознавания</strong><small>Модели из папки окружения и кэша HuggingFace. «Автоматически» — первая найденная.</small></label><div class="settings-control"><select id="modelPicker" title="Выбрать модель распознавания" aria-label="Выбрать модель распознавания"><option value="">Автоматически</option></select></div></div>' : "") + settingsFieldMarkup(field, tab); }).join("");
       if (section.id === "updates") rows += '<div class="settings-row"><div class="settings-label"><strong>Проверка версии</strong><small id="updateStatus" class="update-status" role="status" aria-live="polite"></small></div><div class="settings-control"><button id="checkUpdates" class="settings-reset" type="button" title="Проверить наличие новой версии Folder-video" aria-label="Проверить обновление Folder-video">Проверить обновление</button></div></div>';
       if (section.id === "transcription") rows += '<div class="settings-row"><div class="settings-label"><strong>Окружение распознавания</strong><small id="envStatus" class="update-status" role="status" aria-live="polite">Проверка…</small></div><div class="settings-control"><button id="envDownloadModel" class="settings-reset" type="button" title="Скачать модель Parakeet TDT в папку окружения" aria-label="Скачать модель распознавания">Скачать модель</button> <button id="envDownloadLibrary" class="settings-reset" type="button" title="Скачать библиотеку transcribe в папку окружения" aria-label="Скачать библиотеку распознавания">Скачать библиотеку</button> <button id="envCancel" class="settings-reset" type="button" hidden title="Отменить скачивание" aria-label="Отменить скачивание">Отмена</button></div></div>';
       var backups = section.id === "cut" ? '<div class="settings-group"><header class="settings-card-heading"><h3>Бэкапы вырезки</h3></header><div id="cutBackups" class="cut-backups">Загрузка…</div></div>' : "";
@@ -863,6 +864,18 @@
     });
     $("#settingsForm").querySelectorAll("[data-setting]").forEach(function(control) { control.addEventListener(control.tagName === "INPUT" && control.type !== "checkbox" ? "input" : "change", function() { var field = SETTINGS_FIELDS.find(function(item) { return item.key === control.dataset.setting; }); var value = field.type === "checkbox" ? control.checked : field.type === "select" && typeof readSetting(tab.draft, field.key) === "number" ? Number(control.value) : control.value; writeSetting(tab.draft, field.key, value); tab.dirty = true; $("#settingsState").textContent = "Есть несохранённые изменения"; }); });
     $("#settingsForm").querySelectorAll("[data-browse]").forEach(function(button) { button.addEventListener("click", async function(event) { event.preventDefault(); var folder = await window.folderVideo.chooseFolder(); if (!folder) return; var input = $("#settingsForm").querySelector("input[data-setting=\"" + button.dataset.browse + "\"]"); input.value = folder; input.dispatchEvent(new Event("input")); }); });
+    var modelInput = $("#setting-transcription-modelPath"), picker = $("#modelPicker");
+    $("#settingsForm").querySelectorAll("[data-browse-file]").forEach(function(button) { button.addEventListener("click", async function(event) { event.preventDefault(); var file = await window.folderVideo.chooseModelFile(); if (!file) return; modelInput.value = file; modelInput.dispatchEvent(new Event("input")); }); });
+    async function fillModelPicker() {
+      var models = await window.folderVideo.listTranscribeModels(), current = modelInput.value.trim();
+      var labels = { environment: "папка окружения", huggingface: "кэш HuggingFace" };
+      picker.innerHTML = '<option value="">Автоматически</option>' + models.map(function(item) { return '<option value="' + escapeHtml(item.path) + '">' + escapeHtml(item.name + " (" + labels[item.source] + ")") + '</option>'; }).join("");
+      if (current && !models.some(function(item) { return item.path === current; })) picker.insertAdjacentHTML("beforeend", '<option value="' + escapeHtml(current) + '">' + escapeHtml(current.split(/[\\/]/).pop() + " (свой файл)") + '</option>');
+      picker.value = current;
+    }
+    picker.addEventListener("change", function() { modelInput.value = picker.value; modelInput.dispatchEvent(new Event("input")); });
+    modelInput.addEventListener("input", function() { var value = modelInput.value.trim(); if (!Array.from(picker.options).some(function(option) { return option.value === value; })) fillModelPicker(); else picker.value = value; });
+    fillModelPicker();
     setupTranscribeEnvironment();
     $("#resetSettings").addEventListener("click", async function() { if (!confirm("Сбросить настройки к значениям по умолчанию?")) return; var result = await window.folderVideo.getDefaultSettings(); tab.draft = result.settings; tab.dirty = true; renderSettings(tab); });
     $("#settingsForm").addEventListener("submit", function(event) { event.preventDefault(); saveSettingsTab(tab); });
