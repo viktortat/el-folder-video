@@ -1088,18 +1088,47 @@ ipcMain.handle('folder-video:youtube-search', async (_event, filePath, durationS
     return { query, candidates, auto: youtubeLink.pickAutoCandidate(candidates, Number(durationSeconds)) };
   } catch (error) { return { error: error.message }; }
 });
+async function writeYoutubeLink(filePath, url) {
+  const published = await fetchPublishedDate(url);
+  const result = await writeAuthorUrl(filePath, url, published);
+  if (published) storePublishedDate(filePath, published, true);
+  const warnings = [];
+  if (!published) warnings.push('Дату публикации получить не удалось');
+  if (!result.datesIntact) warnings.push('Не удалось полностью сохранить даты файла');
+  return { url: result.url, published: result.published || '', warning: warnings.join('. ') };
+}
 ipcMain.handle('folder-video:youtube-write', async (_event, filePath, url) => {
   try {
     if (!isSupportedVideoPath(filePath) || !youtubeLink.isWritableExtension(path.extname(filePath))) return { error: 'Формат не поддерживает запись свойства' };
     if (!youtubeLink.isYouTubeVideoUrl(url)) return { error: 'Некорректная ссылка YouTube' };
-    const published = await fetchPublishedDate(url);
-    const result = await writeAuthorUrl(filePath, url, published);
-    if (published) storePublishedDate(filePath, published, true);
-    const warnings = [];
-    if (!published) warnings.push('Дату публикации получить не удалось');
-    if (!result.datesIntact) warnings.push('Не удалось полностью сохранить даты файла');
-    return { url: result.url, published: result.published || '', warning: warnings.join('. ') };
+    return await writeYoutubeLink(filePath, url);
   } catch (error) { return { error: error.message }; }
+});
+// Пакетная обработка одного файла: status = skipped | date | written | notfound | ambiguous | error.
+// Ничего не перезаписывает: есть ссылка и дата — пропуск; есть ссылка без даты — дозапрос даты; иначе поиск и запись при точном совпадении длительности.
+ipcMain.handle('folder-video:youtube-batch-item', async (_event, filePath) => {
+  try {
+    if (!isSupportedVideoPath(filePath) || !youtubeLink.isWritableExtension(path.extname(filePath))) return { status: 'skipped', reason: 'format' };
+    const current = await readAuthorUrl(filePath);
+    if (youtubeLink.isYouTubeVideoUrl(current.url)) {
+      if (current.published) return { status: 'skipped' };
+      const published = await fetchPublishedDate(current.url);
+      if (!published) return { status: 'error', error: 'Дату публикации получить не удалось' };
+      await writePublishedDate(filePath, published);
+      storePublishedDate(filePath, published, false);
+      return { status: 'date', url: current.url, published };
+    }
+    const query = youtubeLink.cleanSearchTitle(path.basename(filePath));
+    if (!query) return { status: 'error', error: 'Не удалось получить название для поиска' };
+    const candidates = await searchYouTube(query);
+    if (!candidates.length) return { status: 'notfound', query };
+    let duration = NaN;
+    try { duration = await probeDuration(filePath); } catch { /* без ffprobe точное совпадение недоступно */ }
+    const auto = youtubeLink.pickAutoCandidate(candidates, Number(duration));
+    if (!auto) return { status: 'ambiguous', query, count: candidates.length };
+    const result = await writeYoutubeLink(filePath, auto.url);
+    return { status: 'written', url: result.url, published: result.published, warning: result.warning };
+  } catch (error) { return { status: 'error', error: error.message }; }
 });
 // Дозапрос даты публикации для видео, у которого ссылка уже записана (дата файла не меняется).
 ipcMain.handle('folder-video:youtube-date', async (_event, filePath, url) => {

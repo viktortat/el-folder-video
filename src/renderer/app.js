@@ -121,7 +121,7 @@
   window.folderVideo.onUpdateStatus(showUpdateStatus);
   window.folderVideo.getUpdateState().then(showUpdateStatus).catch(function() {});
   window.folderVideo.onPrepareUpdate(async function() {
-    if (state.cutJob || state.speedUp || state.transcript || state.youtubeBusy.size) throw new Error("Дождитесь завершения обработки видео и повторите обновление.");
+    if (state.cutJob || state.speedUp || state.transcript || state.youtubeBusy.size || state.youtubeBatch) throw new Error("Дождитесь завершения обработки видео и повторите обновление.");
     if (state.tabs.some(function(tab) { return tab.metadataDirty || (tab.type === "settings" && tab.dirty); })) throw new Error("Сохраните изменения метаданных и настроек перед обновлением.");
     var players = state.tabs.filter(function(tab) { return tab.type === "player"; });
     await Promise.all(players.map(flushPlayerNotes));
@@ -420,6 +420,7 @@
     var tab = state.tabs.find(function(item) { return item.type === 'player' && item.video.path === state.transcript.filePath; });
     if (tab) { tab.transcriptProgress = progress.percent; updateTranscriptControls(tab); }
     applyRunningFlag(state.transcript.filePath);
+    if (state.transcriptBatch) { var batchButton = $("#transcriptBatch"); if (batchButton) { var batchTitle = transcriptBatchTitle(state.transcriptBatch); batchButton.style.setProperty("--p", transcriptBatchPercent(state.transcriptBatch) + "%"); batchButton.title = batchTitle; batchButton.setAttribute("aria-label", batchTitle); } }
   });
   document.addEventListener("keydown", function(event) { if (event.key === "Escape") { if (state.favoritesOpen) closeFavorites(); if (state.recentVideosOpen) closeRecentVideos(); closeCtxMenu(); } }); document.addEventListener("click", function() { closeCtxMenu(); });
   applyTheme("dark", false); updateFavoritesButton(); updateRecentVideosButton();
@@ -1011,6 +1012,8 @@
     });
     $("#sort").addEventListener("change", function(event) { state.sort = event.target.value; state.page = 1; renderFolder(); });
     var columnsButton = $("#toggleColumns");
+    var batchButton = $("#youtubeBatch"); if (batchButton) batchButton.addEventListener("click", startYoutubeBatch);
+    var transcriptBatchButton = $("#transcriptBatch"); if (transcriptBatchButton) transcriptBatchButton.addEventListener("click", startTranscriptBatch);
     if (columnsButton) columnsButton.addEventListener("click", function() { state.extraColumns = !state.extraColumns; try { localStorage.setItem("folder-video-extra-columns", String(state.extraColumns)); } catch (error) {} renderFolder(); });
     if (state.extraColumns) { bindTranscriptFlags(rows); hydrateExtraColumns(rows); }
     $("#direction").addEventListener("click", function() { state.asc = !state.asc; state.page = 1; renderFolder(); });
@@ -1054,7 +1057,115 @@
   // Колонки «Транскрипция» и «Дата на YouTube»: включаются кнопкой под списком, заполняются фоном по видимым строкам.
   function columnsBarMarkup() {
     var label = state.extraColumns ? "Скрыть колонки: транскрипция и дата YouTube" : "Показать колонки: транскрипция и дата YouTube";
-    return "<button id=\"toggleColumns\" class=\"columns-toggle" + (state.extraColumns ? " is-active" : "") + "\" type=\"button\" aria-pressed=\"" + state.extraColumns + "\" title=\"" + label + "\" aria-label=\"" + label + "\">▦</button>";
+    return "<button id=\"toggleColumns\" class=\"columns-toggle" + (state.extraColumns ? " is-active" : "") + "\" type=\"button\" aria-pressed=\"" + state.extraColumns + "\" title=\"" + label + "\" aria-label=\"" + label + "\">▦</button>" + youtubeBatchMarkup() + transcriptBatchMarkup();
+  }
+  // Пакетная транскрибация: все видео списка без актуальной транскрипции, по одному; «градусник» на кнопке — общий прогресс.
+  var TRANSCRIPT_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>';
+  function transcriptBatchPercent(batch) { return Math.min(100, Math.round(((batch.done + (state.transcript ? (state.transcript.progress || 0) / 100 : 0)) / batch.total) * 100)); }
+  function transcriptBatchTitle(batch) {
+    return batch ? "Транскрибация: " + batch.done + " из " + batch.total + " (" + transcriptBatchPercent(batch) + "%). Нажмите, чтобы отменить" : "Запустить транскрибацию для всех видео списка, у которых её нет";
+  }
+  function transcriptBatchMarkup() {
+    var batch = state.transcriptBatch, title = transcriptBatchTitle(batch);
+    return "<button id=\"transcriptBatch\" class=\"transcript-batch" + (batch ? " is-running" : "") + "\" type=\"button\"" + (batch ? " style=\"--p:" + transcriptBatchPercent(batch) + "%\"" : "") + " title=\"" + title + "\" aria-label=\"" + title + "\">" + (batch ? "<span>" + batch.done + "/" + batch.total + "</span>" : TRANSCRIPT_ICON) + "</button>";
+  }
+  function applyTranscriptBatchButton() {
+    var button = $("#transcriptBatch"); if (!button) return;
+    var fresh = document.createElement("div"); fresh.innerHTML = transcriptBatchMarkup();
+    button.replaceWith(fresh.firstChild); $("#transcriptBatch").addEventListener("click", startTranscriptBatch);
+  }
+  async function startTranscriptBatch() {
+    if (state.transcriptBatch) { state.transcriptBatch.canceled = true; if (state.transcript) await window.folderVideo.cancelTranscript(state.transcript.operationId); return; }
+    if (state.cutJob || state.speedUp || state.transcript || state.youtubeBatch) { notice("Дождитесь завершения другой обработки видео."); return; }
+    var all = filteredFiles(), pending = [];
+    notice("Проверяю, у каких видео уже есть транскрипция…", true);
+    for (var i = 0; i < all.length; i++) {
+      var status = null; try { status = await window.folderVideo.hasTranscript(all[i].path); } catch (error) { status = null; }
+      if (!(status && status.available)) pending.push(all[i]);
+    }
+    if (!pending.length) { notice("У всех видео списка уже есть транскрипция.", true); return; }
+    if (!window.confirm("Транскрибировать видео: " + pending.length + " (из " + all.length + " в списке)?\n\nВидео обрабатываются по одному, это может занять много времени. Транскрипции сохраняются в общую папку транскрипций. Отмена — повторное нажатие на кнопку.")) return;
+    var folder = state.folderPath, batch = state.transcriptBatch = { total: pending.length, done: 0, canceled: false };
+    var made = 0, failed = null;
+    applyTranscriptBatchButton();
+    for (var index = 0; index < pending.length; index++) {
+      if (batch.canceled || state.folderPath !== folder) break;
+      var video = pending[index], operationId = "transcript-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+      state.transcript = { operationId: operationId, filePath: video.path, progress: 0 }; applyRunningFlag(video.path); applyTranscriptBatchButton();
+      var result = null; try { result = await window.folderVideo.startTranscript(video.path, operationId); } catch (error) { result = { error: error.message }; }
+      if (state.transcript && state.transcript.operationId === operationId) state.transcript = null;
+      state.tabs.forEach(function(tab) { if (tab.type === "player" && tab.video.path === video.path && tab.transcriptStatus !== "running") { tab.transcriptStatus = null; tab.transcriptSegments = []; tab.summaryData = null; tab.summaryStatus = null; } });
+      var after = null; try { after = await window.folderVideo.hasTranscript(video.path); } catch (error) { after = null; }
+      applyTranscriptFlag(video, after);
+      if (result && result.error) { failed = video.name + ": " + result.error; break; }
+      if (result && result.canceled) { batch.canceled = true; break; }
+      made++; batch.done = index + 1; applyTranscriptBatchButton();
+    }
+    var canceled = batch.canceled; state.transcriptBatch = null; state.transcript = null; applyTranscriptBatchButton();
+    if (failed) notice("Транскрибация остановлена. Готово: " + made + " из " + batch.total + ". " + failed);
+    else notice((canceled ? "Транскрибация отменена. " : "Транскрибация завершена. ") + "Готово: " + made + " из " + batch.total, !canceled);
+  }
+  // Пакетная привязка YouTube: все видео списка (с учётом фильтров, со всех страниц) — ссылка и дата публикации в свойства файла.
+  function youtubeBatchMarkup() {
+    var batch = state.youtubeBatch, title = batch ? "Идёт обработка: " + batch.done + " из " + batch.total + ". Нажмите, чтобы отменить" : "Найти исходники на YouTube для всех видео списка и записать ссылку и дату публикации в свойства файлов";
+    return "<button id=\"youtubeBatch\" class=\"youtube-batch" + (batch ? " is-running" : "") + "\" type=\"button\" title=\"" + title + "\" aria-label=\"" + title + "\">" + (batch ? "<span>" + batch.done + "/" + batch.total + "</span>" : YOUTUBE_ICON) + "</button>";
+  }
+  function applyYoutubeBatchButton() {
+    var button = $("#youtubeBatch"); if (!button) return;
+    button.outerHTML = youtubeBatchMarkup();
+    var fresh = $("#youtubeBatch"); if (fresh) fresh.addEventListener("click", startYoutubeBatch);
+  }
+  function closeBatchReport() { var overlay = $("#batchReportOverlay"); if (overlay) overlay.remove(); document.removeEventListener("keydown", batchReportKeydown); }
+  function batchReportKeydown(event) { if (event.key === "Escape") closeBatchReport(); }
+  function showBatchReport(report, canceled) {
+    closeBatchReport();
+    function section(title, list, withOpen) {
+      if (!list.length) return "";
+      return "<h4>" + title + " · " + list.length + "</h4><ul>" + list.map(function(item) {
+        return "<li class=\"favorite-item youtube-candidate\"><div class=\"youtube-candidate-text\"><strong>" + escapeHtml(item.name) + "</strong>" + (item.note ? "<span>" + escapeHtml(item.note) + "</span>" : "") + "</div>" +
+          (withOpen ? "<button type=\"button\" class=\"youtube-candidate-button\" data-open=\"" + escapeHtml(item.path) + "\" title=\"Открыть видео и выбрать исходник вручную\" aria-label=\"Открыть видео и выбрать исходник вручную\">Открыть</button>" : "") + "</li>";
+      }).join("") + "</ul>";
+    }
+    var overlay = document.createElement("div"); overlay.id = "batchReportOverlay"; overlay.className = "favorites-overlay";
+    overlay.innerHTML = "<section class=\"favorites-panel youtube-picker\" role=\"dialog\" aria-modal=\"true\" aria-label=\"Итоги привязки YouTube\"><header><strong>" + (canceled ? "Отменено" : "Готово") + "</strong><span>" + report.total + "</span><button id=\"closeBatchReport\" title=\"Закрыть\" aria-label=\"Закрыть\">×</button></header>" +
+      "<p class=\"youtube-picker-note\">Записано: " + report.written.length + " · дата добавлена: " + report.date.length + " · уже было: " + report.skipped + " · не найдено или неоднозначно: " + (report.manual.length) + " · ошибки: " + report.errors.length + "</p>" +
+      section("Не найдено или неоднозначно — выберите вручную", report.manual, true) + section("Ошибки", report.errors, true) + section("Записано", report.written, false) + section("Дата добавлена", report.date, false) + "</section>";
+    document.body.appendChild(overlay);
+    document.addEventListener("keydown", batchReportKeydown);
+    overlay.addEventListener("click", function(event) { if (event.target === overlay) closeBatchReport(); });
+    $("#closeBatchReport").addEventListener("click", closeBatchReport);
+    overlay.querySelectorAll("[data-open]").forEach(function(button) { button.addEventListener("click", function() { closeBatchReport(); openVideoByPath(button.dataset.open); }); });
+  }
+  async function startYoutubeBatch() {
+    if (state.youtubeBatch) { state.youtubeBatch.canceled = true; return; }
+    if (state.cutJob || state.speedUp || state.transcript || state.transcriptBatch) { notice("Дождитесь завершения другой обработки видео."); return; }
+    var videos = filteredFiles().filter(function(video) { return youtubeWritable(video.path); });
+    if (!videos.length) { notice("В списке нет видео mp4, m4v или mov — для других форматов ссылка YouTube не хранится."); return; }
+    if (!window.confirm("Обработать видео: " + videos.length + "?\n\nИмена файлов уйдут в сеть (YouTube). Для каждого видео без ссылки будет найден исходник; запись — только при точном совпадении длительности. Уже заполненные свойства не перезаписываются. Даты создания и изменения файлов не изменятся.")) return;
+    var folder = state.folderPath, batch = state.youtubeBatch = { total: videos.length, done: 0, canceled: false };
+    var report = { total: videos.length, written: [], date: [], manual: [], errors: [], skipped: 0 };
+    applyYoutubeBatchButton();
+    for (var index = 0; index < videos.length; index++) {
+      if (batch.canceled || state.folderPath !== folder) { batch.canceled = true; break; }
+      var video = videos[index], result = null;
+      try { result = await window.folderVideo.youtubeBatchItem(video.path); } catch (error) { result = { status: "error", error: error.message }; }
+      if (!result) result = { status: "error", error: "нет ответа" };
+      var entry = { path: video.path, name: video.name, note: "" };
+      if (result.status === "written" || result.status === "date") {
+        state.youtubeSourceCache.set(youtubeSourceKey(video), { mode: "linked", url: result.url, published: result.published || "" });
+        state.youtubeDateTried.add(youtubeSourceKey(video));
+        entry.note = result.warning || "";
+        report[result.status === "written" ? "written" : "date"].push(entry);
+        applyPublishedCell(video);
+      } else if (result.status === "skipped") report.skipped++;
+      else if (result.status === "notfound") { entry.note = "На YouTube ничего не найдено"; report.manual.push(entry); }
+      else if (result.status === "ambiguous") { entry.note = "Нет совпадения по длительности (кандидатов: " + result.count + ")"; report.manual.push(entry); }
+      else { entry.note = result.error || "Ошибка"; report.errors.push(entry); }
+      batch.done = index + 1; applyYoutubeBatchButton();
+      if (result.status === "written" || result.status === "notfound" || result.status === "ambiguous" || result.status === "date") await new Promise(function(resolve) { setTimeout(resolve, 1000); });
+    }
+    var canceled = batch.canceled; state.youtubeBatch = null; applyYoutubeBatchButton();
+    showBatchReport(report, canceled);
   }
   function extraCellsMarkup(video) {
     var info = state.youtubeSourceCache.get(youtubeSourceKey(video));

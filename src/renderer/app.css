@@ -421,6 +421,21 @@ body.light .transcript-note { color:#5932b8; background:#f1f4f9; border-color:#c
 
 .pager { position:relative; }
 .columns-toggle { position:absolute; left:0; top:50%; transform:translateY(-50%); width:32px; height:32px; padding:0; font-size:16px !important; line-height:1; border-radius:8px; border:1px solid var(--line); background:#181d24; color:#aebbd0; font-size:12px; font-weight:600; cursor:pointer; }
+.youtube-batch { position:absolute; left:40px; top:50%; transform:translateY(-50%); min-width:32px; height:32px; padding:0 6px; display:inline-flex; align-items:center; justify-content:center; border-radius:8px; border:1px solid var(--line); background:#181d24; color:#aebbd0; font-size:11px; font-weight:600; cursor:pointer; }
+.youtube-batch svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linejoin:round; }
+.youtube-batch:hover { border-color:#7457b9; color:#fff; }
+.youtube-batch.is-running { border-color:#a98dff; background:#2a2147; color:#e4dcff; }
+body.light .youtube-batch { background:#fff; border-color:#cfd7e3; color:#48566c; }
+body.light .youtube-batch:hover { border-color:#7655cc; color:#5935b5; }
+body.light .youtube-batch.is-running { background:#eee8ff; border-color:#7655cc; color:#5935b5; }
+.transcript-batch { position:absolute; left:80px; top:50%; transform:translateY(-50%); min-width:32px; height:32px; padding:0 6px; display:inline-flex; align-items:center; justify-content:center; border-radius:8px; border:1px solid var(--line); background:#181d24; color:#aebbd0; font-size:11px; font-weight:600; cursor:pointer; }
+.transcript-batch svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.transcript-batch:hover { border-color:#7457b9; color:#fff; }
+.transcript-batch.is-running { min-width:56px; border-color:#7457b9; color:#fff; background:linear-gradient(90deg,#5b3fb0 var(--p,0%),#181d24 var(--p,0%)); }
+body.light .transcript-batch { background:#fff; border-color:#cfd7e3; color:#48566c; }
+body.light .transcript-batch:hover { border-color:#7655cc; color:#5935b5; }
+body.light .transcript-batch.is-running { color:#2a1a66; border-color:#7655cc; background:linear-gradient(90deg,#c9b8ff var(--p,0%),#fff var(--p,0%)); }
+.batch-h,#batchReportOverlay h4 { margin:12px 16px 4px; font-size:12px; opacity:.8; }
 .columns-toggle:hover { border-color:#7457b9; color:#fff; }
 .columns-toggle.is-active { border-color:#a98dff; background:#2a2147; color:#e4dcff; }
 .row-cell { flex:0 0 118px; display:flex; align-items:center; justify-content:center; text-align:center; font:11px "DM Mono",monospace; color:#c4cee0; }
