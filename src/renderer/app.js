@@ -36,7 +36,7 @@
   const state = {
     folderPath: "", files: [], skipped: 0, recursive: false, hideEmptyFiles: false, recentDaysEnabled: localStorage.getItem("folder-video-recent-days-enabled") === "true", recentDays: normalizeRecentDays(localStorage.getItem("folder-video-recent-days")), filterText: "", sort: "date", asc: false, page: 1, pageSize: 10,
     tabs: [{ id: "folder", type: "folder", label: "Видео" }], activeTab: "folder", cutJob: null, cutUndo: [], cutPreview: null,
-    stripCache: new Map(), stripPending: new Map(), frameCache: new Map(), favoriteThumbnailCache: new Map(), durationCache: new Map(), youtubeSourceCache: new Map(), youtubeDateTried: new Set(), youtubeBusy: new Set(), captureVideos: new Map(), task: 0, thumbnailGeneration: 0, thumbnailPriority: 0,
+    stripCache: new Map(), stripPending: new Map(), frameCache: new Map(), favoriteThumbnailCache: new Map(), durationCache: new Map(), extraColumns: localStorage.getItem("folder-video-extra-columns") === "true", youtubeSourceCache: new Map(), youtubeDateTried: new Set(), youtubeBusy: new Set(), captureVideos: new Map(), task: 0, thumbnailGeneration: 0, thumbnailPriority: 0,
     recentFolders: JSON.parse(localStorage.getItem("folder-video-recent") || "[]"),
     pinnedFolders: JSON.parse(localStorage.getItem("folder-video-pinned") || "[]"),
     recentMoveFolders: (function() { try { var list = JSON.parse(localStorage.getItem("folder-video-recent-move-folders") || "[]"); return Array.isArray(list) ? list.filter(function(item) { return typeof item === "string" && item; }).slice(0, 5) : []; } catch (_) { return []; } })(),
@@ -446,7 +446,7 @@
     var content = $("#folderContent");
     var row = content ? content.querySelector(".row") : null;
     if (!content || !row) { state._sizing = false; return; }
-    var pagerHeight = (content.querySelector(".pager") ? content.querySelector(".pager").getBoundingClientRect().height : 0);
+    var pagerHeight = (content.querySelector(".pager") ? content.querySelector(".pager").getBoundingClientRect().height : 0) + (content.querySelector(".columns-bar") ? content.querySelector(".columns-bar").getBoundingClientRect().height : 0);
     var rowHeight = row.getBoundingClientRect().height + 7;
     var nextPageSize = Math.max(1, Math.floor((content.clientHeight - pagerHeight - 8) / rowHeight));
     if (nextPageSize === state.pageSize) { state._sizing = false; return; }
@@ -663,6 +663,7 @@
     var current = state.youtubeSourceCache.get(key);
     if (current && current.mode === "linked" && current.url === info.url) state.youtubeSourceCache.set(key, { mode: "linked", url: info.url, published: result.published });
     applyYoutubeButton(video);
+    applyPublishedCell(video);
   }
   async function saveYoutubeSource(video, url) {
     state.youtubeBusy.add(video.path); applyYoutubeButton(video);
@@ -828,7 +829,7 @@
     var markup = SETTINGS_SECTIONS.map(function(section) {
       var rows = SETTINGS_FIELDS.filter(function(field) { return section.groups.includes(field.group); }).map(function(field) { return (field.key === "transcription.modelPath" ? '<div class="settings-row"><label class="settings-label" for="modelPicker"><strong>Модель распознавания</strong><small>Модели из папки окружения и кэша HuggingFace. «Автоматически» — первая найденная.</small></label><div class="settings-control"><select id="modelPicker" title="Выбрать модель распознавания" aria-label="Выбрать модель распознавания"><option value="">Автоматически</option></select></div></div>' : "") + settingsFieldMarkup(field, tab); }).join("");
       if (section.id === "updates") rows += '<div class="settings-row"><div class="settings-label"><strong>Проверка версии</strong><small id="updateStatus" class="update-status" role="status" aria-live="polite"></small></div><div class="settings-control"><button id="checkUpdates" class="settings-reset" type="button" title="Проверить наличие новой версии Folder-video" aria-label="Проверить обновление Folder-video">Проверить обновление</button></div></div>';
-      if (section.id === "transcription") rows += '<div class="settings-row"><div class="settings-label"><strong>Окружение распознавания</strong><small id="envStatus" class="update-status" role="status" aria-live="polite">Проверка…</small></div><div class="settings-control"><button id="envDownloadModel" class="settings-reset" type="button" title="Скачать модель Parakeet TDT в папку окружения" aria-label="Скачать модель распознавания">Скачать модель</button> <button id="envDownloadLibrary" class="settings-reset" type="button" title="Скачать библиотеку transcribe в папку окружения" aria-label="Скачать библиотеку распознавания">Скачать библиотеку</button> <button id="envCancel" class="settings-reset" type="button" hidden title="Отменить скачивание" aria-label="Отменить скачивание">Отмена</button></div></div>';
+      if (section.id === "transcription") rows += '<div class="settings-row"><div class="settings-label"><strong>Окружение распознавания</strong><small id="envStatus" class="update-status" role="status" aria-live="polite">Проверка…</small></div><div class="settings-control"><button id="envDownloadModel" class="settings-reset" type="button" title="Скачать модель Parakeet Ultra в папку окружения" aria-label="Скачать модель распознавания">Скачать модель</button> <button id="envDownloadLibrary" class="settings-reset" type="button" title="Скачать библиотеку transcribe в папку окружения" aria-label="Скачать библиотеку распознавания">Скачать библиотеку</button> <button id="envCancel" class="settings-reset" type="button" hidden title="Отменить скачивание" aria-label="Отменить скачивание">Отмена</button></div></div>';
       var backups = section.id === "cut" ? '<div class="settings-group"><header class="settings-card-heading"><h3>Бэкапы вырезки</h3></header><div id="cutBackups" class="cut-backups">Загрузка…</div></div>' : "";
       return '<section id="settings-' + section.id + '" class="settings-section" aria-labelledby="settings-title-' + section.id + '"><header class="settings-section-heading"><h2 id="settings-title-' + section.id + '">' + escapeHtml(section.label) + '</h2><p>' + escapeHtml(section.hint) + '</p></header><div class="settings-group">' + rows + '</div>' + backups + '</section>';
     }).join("");
@@ -1008,6 +1009,9 @@
       var filter = $("#filter"); filter.focus(); filter.setSelectionRange(selectionStart, selectionEnd);
     });
     $("#sort").addEventListener("change", function(event) { state.sort = event.target.value; state.page = 1; renderFolder(); });
+    var columnsButton = $("#toggleColumns");
+    if (columnsButton) columnsButton.addEventListener("click", function() { state.extraColumns = !state.extraColumns; try { localStorage.setItem("folder-video-extra-columns", String(state.extraColumns)); } catch (error) {} renderFolder(); });
+    if (state.extraColumns) hydrateExtraColumns(rows);
     $("#direction").addEventListener("click", function() { state.asc = !state.asc; state.page = 1; renderFolder(); });
     var content = $("#folderContent");
     content.addEventListener("dragover", function(event) { event.preventDefault(); });
@@ -1044,14 +1048,55 @@
       cells += "<div class=\"thumb\" data-index=\"" + ci + "\"><span class=\"time\">—</span></div>";
     }
     var favorite = isFavorite(video.path);
-    return "<article class=\"row\" data-path=\"" + escapeHtml(video.path) + "\"><div class=\"row-info\"><div class=\"row-name\" title=\"" + escapeHtml(video.name) + "\">" + escapeHtml(video.name) + "</div><div class=\"row-meta\"><span class=\"duration\">…</span><span>" + formatSize(video.size) + "</span><span>" + formatDate(video.lastModified) + "</span></div></div><div class=\"strip\">" + cells + "</div><button class=\"favorite-toggle" + (favorite ? " is-favorite" : "") + "\" data-path=\"" + escapeHtml(video.path) + "\" title=\"" + (favorite ? "Удалить из избранного" : "Добавить в избранное") + "\" aria-label=\"" + (favorite ? "Удалить из избранного" : "Добавить в избранное") + "\">" + (favorite ? "♥" : "♡") + "</button></article>";
+    return "<article class=\"row\" data-path=\"" + escapeHtml(video.path) + "\"><div class=\"row-info\"><div class=\"row-name\" title=\"" + escapeHtml(video.name) + "\">" + escapeHtml(video.name) + "</div><div class=\"row-meta\"><span class=\"duration\">…</span><span>" + formatSize(video.size) + "</span><span>" + formatDate(video.lastModified) + "</span></div></div><div class=\"strip\">" + cells + "</div>" + (state.extraColumns ? extraCellsMarkup(video) : "") + "<button class=\"favorite-toggle" + (favorite ? " is-favorite" : "") + "\" data-path=\"" + escapeHtml(video.path) + "\" title=\"" + (favorite ? "Удалить из избранного" : "Добавить в избранное") + "\" aria-label=\"" + (favorite ? "Удалить из избранного" : "Добавить в избранное") + "\">" + (favorite ? "♥" : "♡") + "</button></article>";
+  }
+  // Колонки «Транскрипция» и «Дата на YouTube»: включаются кнопкой под списком, заполняются фоном по видимым строкам.
+  function columnsBarMarkup() {
+    var label = state.extraColumns ? "Скрыть колонки: транскрипция и дата YouTube" : "Показать колонки: транскрипция и дата YouTube";
+    return "<button id=\"toggleColumns\" class=\"columns-toggle" + (state.extraColumns ? " is-active" : "") + "\" type=\"button\" aria-pressed=\"" + state.extraColumns + "\" title=\"" + label + "\" aria-label=\"" + label + "\">▦</button>";
+  }
+  function extraCellsMarkup(video) {
+    var info = state.youtubeSourceCache.get(youtubeSourceKey(video));
+    return "<div class=\"row-cell row-transcript\"><button type=\"button\" class=\"transcript-flag is-checking\" data-flag=\"" + escapeHtml(video.path) + "\" title=\"Проверяю транскрипцию…\" aria-label=\"Проверяю транскрипцию…\">…</button></div><div class=\"row-cell row-published\" data-published=\"" + escapeHtml(video.path) + "\">" + publishedCellText(video, info) + "</div>";
+  }
+  function publishedCellText(video, info) {
+    if (!youtubeWritable(video.path)) return "<span class=\"cell-muted\" title=\"Для этого формата ссылка YouTube не хранится\">—</span>";
+    if (!info) return "<span class=\"cell-muted\">…</span>";
+    if (info.mode === "linked" && info.published && window.PublishedDateCore) { var text = window.PublishedDateCore.formatPublishedDate(info.published); if (text) return "<span title=\"Дата публикации на YouTube\">" + escapeHtml(text) + "</span>"; }
+    return "<span class=\"cell-muted\" title=\"" + (info.mode === "linked" ? "Дата публикации пока не получена" : "Ссылка на YouTube не записана") + "\">—</span>";
+  }
+  function rowElement(filePath) { return Array.prototype.find.call(document.querySelectorAll(".row"), function(row) { return row.dataset.path === filePath; }); }
+  function applyTranscriptFlag(video, result) {
+    var row = rowElement(video.path), flag = row && row.querySelector(".transcript-flag"); if (!flag) return;
+    var ok = result && result.available, text = ok ? "Есть транскрипция" : result && result.stale ? "Транскрипция устарела: файл изменился" : "Транскрипции нет";
+    flag.className = "transcript-flag " + (ok ? "is-yes" : result && result.stale ? "is-stale" : "is-no");
+    flag.textContent = ok ? "✓ Есть" : result && result.stale ? "↻ Устарела" : "— Нет";
+    flag.title = text; flag.setAttribute("aria-label", text);
+  }
+  function applyPublishedCell(video) {
+    var row = rowElement(video.path), cell = row && row.querySelector(".row-published"); if (!cell) return;
+    cell.innerHTML = publishedCellText(video, state.youtubeSourceCache.get(youtubeSourceKey(video)));
+  }
+  async function hydrateExtraColumns(videos) {
+    var generation = state.folderPath, queue = videos.slice();
+    async function worker() {
+      while (queue.length) {
+        var video = queue.shift();
+        if (!state.extraColumns || state.folderPath !== generation) return;
+        try { applyTranscriptFlag(video, await window.folderVideo.hasTranscript(video.path)); } catch (error) { applyTranscriptFlag(video, null); }
+        if (!youtubeWritable(video.path)) continue;
+        try { await loadYoutubeSource(video); } catch (error) { /* ячейка останется с прочерком */ }
+        applyPublishedCell(video);
+      }
+    }
+    await Promise.all([worker(), worker()]);
   }
   function pagination(totalPages) {
-    if (totalPages <= 1) return "";
+    if (totalPages <= 1) return "<div class=\"pager\">" + columnsBarMarkup() + "</div>";
     var selected = new Set([1, totalPages]);
     for (var pi = Math.max(1, state.page - 4); pi <= Math.min(totalPages, state.page + 4); pi++) selected.add(pi);
     var pages = [].concat(Array.from(selected)).sort(function(a, b) { return a - b; });
-    var markup = "<div class=\"pager\"><button class=\"page page-previous\" data-page=\"" + Math.max(1, state.page - 1) + "\" " + (state.page === 1 ? "disabled" : "") + " title=\"Предыдущая страница\" aria-label=\"Предыдущая страница\">‹</button><div class=\"page-numbers\">";
+    var markup = "<div class=\"pager\">" + columnsBarMarkup() + "<button class=\"page page-previous\" data-page=\"" + Math.max(1, state.page - 1) + "\" " + (state.page === 1 ? "disabled" : "") + " title=\"Предыдущая страница\" aria-label=\"Предыдущая страница\">‹</button><div class=\"page-numbers\">";
     var previous = 0;
     for (var pi2 = 0; pi2 < pages.length; pi2++) {
       var page = pages[pi2];

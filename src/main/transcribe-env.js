@@ -7,8 +7,11 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const MODEL_FILE = 'parakeet-tdt-0.6b-v3-Q8_0.gguf';
-const MODEL_URL = 'https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-Q8_0.gguf';
+const MODEL_REPO = 'parakeet-ultra-gguf';
+const MODEL_FILE = 'parakeet-ultra-Q8_0.gguf';
+const MODEL_URL = `https://huggingface.co/handy-computer/${MODEL_REPO}/resolve/main/${MODEL_FILE}`;
+// Кэш HuggingFace: сначала модель по умолчанию, затем прежняя Parakeet TDT.
+const CACHE_MODELS = [[MODEL_REPO, MODEL_FILE], ['parakeet-tdt-0.6b-v3-gguf', 'parakeet-tdt-0.6b-v3-Q8_0.gguf']];
 const RUNTIME_URL = 'https://github.com/handy-computer/transcribe.cpp/releases/download/v0.2.3/transcribe-native-0.2.3-windows-x86_64-cpu-vulkan.tar.gz';
 const NATIVE_DIR = 'transcribe-native-windows-x86_64-cpu-vulkan';
 const LIBRARY_NAME = process.platform === 'darwin' ? 'libtranscribe.dylib' : 'transcribe.dll';
@@ -36,16 +39,20 @@ function bundledLibrary() {
 
 function modelsDirectory(settings) { return path.join(environmentDirectory(settings), 'models'); }
 
-function huggingFaceModel() {
-  const root = path.join(os.homedir(), '.cache', 'huggingface', 'hub', 'models--handy-computer--parakeet-tdt-0.6b-v3-gguf', 'snapshots');
-  try {
-    for (const snapshot of fs.readdirSync(root)) {
-      const candidate = path.join(root, snapshot, MODEL_FILE);
-      if (isFile(candidate)) return candidate;
-    }
-  } catch { /* кэша нет */ }
-  return '';
+function huggingFaceModels() {
+  const found = [];
+  for (const [repo, file] of CACHE_MODELS) {
+    const root = path.join(os.homedir(), '.cache', 'huggingface', 'hub', `models--handy-computer--${repo}`, 'snapshots');
+    try {
+      for (const snapshot of fs.readdirSync(root)) {
+        const candidate = path.join(root, snapshot, file);
+        if (isFile(candidate)) { found.push(candidate); break; }
+      }
+    } catch { /* кэша нет */ }
+  }
+  return found;
 }
+function huggingFaceModel() { return huggingFaceModels()[0] || ''; }
 
 function environmentModel(settings) {
   const directory = modelsDirectory(settings);
@@ -67,8 +74,7 @@ function listModels(settings) {
       if (name.toLowerCase().endsWith('.gguf') && isFile(file)) found.push({ path: file, name, source: 'environment' });
     }
   } catch { /* папки моделей нет */ }
-  const cached = huggingFaceModel();
-  if (cached) found.push({ path: cached, name: path.basename(cached), source: 'huggingface' });
+  for (const cached of huggingFaceModels()) found.push({ path: cached, name: path.basename(cached), source: 'huggingface' });
   return found;
 }
 

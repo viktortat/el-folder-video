@@ -1449,6 +1449,11 @@ ipcMain.handle('folder-video:cut-list-backups', async () => { try { return { bac
 ipcMain.handle('folder-video:cut-clear-backups', async () => { try { return { removed: await cutUndoStore.clear() }; } catch (error) { return { error: error.message }; } });
 
 ipcMain.handle('folder-video:transcript-load', async (_event, filePath) => loadTranscript(filePath, true));
+// Лёгкая проверка для колонки списка: есть ли актуальная транскрипция у файла (без запроса ссылки YouTube).
+ipcMain.handle('folder-video:transcript-exists', async (_event, filePath) => {
+  const result = await loadTranscript(filePath, false);
+  return { available: Boolean(result.available), stale: Boolean(result.stale) };
+});
 ipcMain.handle('folder-video:transcript-start', async (event, filePath, operationId) => {
   if (typeof operationId !== 'string' || !operationId) return { error: 'Некорректная операция' };
   if (transcriptJobs.has(operationId)) return { error: 'Транскрибация уже выполняется' };

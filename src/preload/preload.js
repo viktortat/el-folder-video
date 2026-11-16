@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('folderVideo', {
     ipcRenderer.on('folder-video:cut-progress', listener);
     return () => ipcRenderer.removeListener('folder-video:cut-progress', listener);
   },
+  hasTranscript: filePath => ipcRenderer.invoke('folder-video:transcript-exists', filePath),
   loadTranscript: filePath => ipcRenderer.invoke('folder-video:transcript-load', filePath),
   startTranscript: (filePath, operationId) => ipcRenderer.invoke('folder-video:transcript-start', filePath, operationId),
   cancelTranscript: operationId => ipcRenderer.invoke('folder-video:transcript-cancel', operationId),

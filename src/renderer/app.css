@@ -416,3 +416,22 @@ body.light .settings-view .settings-row .update-status.error { color:#b3263f; }
 .video-stage video, .video-stage.has-cut-bar video { flex:1 1 0; width:100%; height:auto; min-height:120px; max-width:100%; max-height:none; object-fit:contain; }
 .transcript-note { margin:8px 10px 4px; padding:4px 8px; border:1px solid #303946; border-radius:6px; color:#c7b9ed; background:#10141a; font:11px/1.4 Manrope,sans-serif; }
 body.light .transcript-note { color:#5932b8; background:#f1f4f9; border-color:#cbd4e1; }
+
+/* Дополнительные колонки списка: транскрипция и дата публикации на YouTube */
+
+.pager { position:relative; }
+.columns-toggle { position:absolute; left:0; top:50%; transform:translateY(-50%); width:32px; height:32px; padding:0; font-size:16px !important; line-height:1; border-radius:8px; border:1px solid var(--line); background:#181d24; color:#aebbd0; font-size:12px; font-weight:600; cursor:pointer; }
+.columns-toggle:hover { border-color:#7457b9; color:#fff; }
+.columns-toggle.is-active { border-color:#a98dff; background:#2a2147; color:#e4dcff; }
+.row-cell { flex:0 0 118px; display:flex; align-items:center; justify-content:center; text-align:center; font:11px "DM Mono",monospace; color:#c4cee0; }
+.cell-muted { color:#6f7c92; }
+.transcript-flag { min-width:92px; height:28px; padding:0 10px; border-radius:7px; border:1px solid var(--line); background:#1b2029; color:#8f9bb0; font-size:11px; font-weight:600; cursor:pointer; }
+.transcript-flag.is-yes { border-color:#2f7d57; background:#173326; color:#6fe0a4; }
+.transcript-flag.is-stale { border-color:#9a7a2a; background:#332b14; color:#f0cd72; }
+body.light .columns-toggle { background:#fff; border-color:#cfd7e3; color:#48566c; }
+body.light .columns-toggle.is-active { background:#eee8ff; border-color:#7655cc; color:#5935b5; }
+body.light .row-cell { color:#263449; }
+body.light .cell-muted { color:#7a879a; }
+body.light .transcript-flag { background:#f1f4f9; border-color:#cfd7e3; color:#5b6a80; }
+body.light .transcript-flag.is-yes { background:#e3f6ec; border-color:#79c39b; color:#1d7a4b; }
+body.light .transcript-flag.is-stale { background:#fbf1d6; border-color:#d9b55a; color:#8a6410; }
