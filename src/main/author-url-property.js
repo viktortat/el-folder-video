@@ -1,8 +1,9 @@
 "use strict";
 
 // Чтение и запись свойств Проводника через Windows Property System: «URL-адрес автора» (System.Media.AuthorUrl)
-// и «Дата создания мультимедиа» (System.Media.DateEncoded) — дата публикации ролика на YouTube.
-// Старые файлы с датой в «Дате выпуска» (System.Media.DateReleased) читаются как запасной вариант.
+// и дата публикации ролика на YouTube. Дата пишется в «Издатель» (System.Media.Publisher, ISO-строка: её показывает окно
+// «Свойства → Подробно»; «Дата создания мультимедиа» (System.Media.DateEncoded) для mp4 там пустая, хотя значение хранится)
+// и в System.Media.DateEncoded. Старые файлы с датой в «Дате выпуска» (System.Media.DateReleased) читаются как запасной вариант.
 // Запуск — только из main.js. Даты создания и изменения файла запоминаются до записи и возвращаются после неё.
 
 const { spawn } = require('node:child_process');
@@ -41,6 +42,19 @@ public static class FvAuthorUrl {
       return "";
     } finally { PropVariantClear(ref v); Marshal.ReleaseComObject(store); }
   }
+  const string MediaFmt = "64440492-4C8B-11D1-8B70-080036B11A03";
+  public static string ReadPublisher(string path) {
+    IPropertyStore store = Open(path, 0); PROPERTYKEY key; key.fmtid = new Guid(MediaFmt); key.pid = 30; PROPVARIANT v;
+    Marshal.ThrowExceptionForHR(store.GetValue(ref key, out v));
+    try { return v.vt == 31 && v.p != IntPtr.Zero ? Marshal.PtrToStringUni(v.p) : ""; }
+    finally { PropVariantClear(ref v); Marshal.ReleaseComObject(store); }
+  }
+  public static void WritePublisher(string path, string value) {
+    IPropertyStore store = Open(path, 2); PROPERTYKEY key; key.fmtid = new Guid(MediaFmt); key.pid = 30;
+    PROPVARIANT v = new PROPVARIANT(); v.vt = 31; v.p = Marshal.StringToCoTaskMemUni(value);
+    try { Marshal.ThrowExceptionForHR(store.SetValue(ref key, ref v)); Marshal.ThrowExceptionForHR(store.Commit()); }
+    finally { PropVariantClear(ref v); Marshal.ReleaseComObject(store); }
+  }
   public static void WriteDate(string path, string value) {
     DateTime day = DateTime.ParseExact(value, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
     IPropertyStore store = Open(path, 2); PROPERTYKEY key = EncodedKey();
@@ -78,7 +92,8 @@ public static class FvAuthorUrl {
 $path = $env:FOLDER_VIDEO_FILE
 function ReadPublished {
   $date = ''
-  try { $date = [FvAuthorUrl]::ReadDate($path) } catch { }
+  try { $p = [FvAuthorUrl]::ReadPublisher($path); if ($p -match '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') { $date = $p } } catch { }
+  if (-not $date) { try { $date = [FvAuthorUrl]::ReadDate($path) } catch { } }
   if (-not $date) { try { $date = [FvAuthorUrl]::Read($path, 100) } catch { } }
   $date
 }
@@ -88,7 +103,11 @@ if ($env:FOLDER_VIDEO_MODE -eq 'read') {
   $item = Get-Item -LiteralPath $path -Force
   $created = $item.CreationTimeUtc.Ticks; $modified = $item.LastWriteTimeUtc.Ticks
   if ($env:FOLDER_VIDEO_MODE -eq 'write') { [FvAuthorUrl]::Write($path, 32, $env:FOLDER_VIDEO_URL) }
-  if ($env:FOLDER_VIDEO_DATE) { [FvAuthorUrl]::WriteDate($path, $env:FOLDER_VIDEO_DATE) }
+  if ($env:FOLDER_VIDEO_DATE) {
+    [FvAuthorUrl]::WriteDate($path, $env:FOLDER_VIDEO_DATE)
+    $existing = ''; try { $existing = [FvAuthorUrl]::ReadPublisher($path) } catch { }
+    if (-not $existing -or $existing -match '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') { [FvAuthorUrl]::WritePublisher($path, $env:FOLDER_VIDEO_DATE) }
+  }
   $item = Get-Item -LiteralPath $path -Force
   $restored = $true
   if ($item.CreationTimeUtc.Ticks -ne $created) { [IO.File]::SetCreationTimeUtc($path, [DateTime]::new($created, 'Utc')); $restored = $false }
