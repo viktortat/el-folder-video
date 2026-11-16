@@ -419,6 +419,7 @@
     state.transcript.progress = progress.percent;
     var tab = state.tabs.find(function(item) { return item.type === 'player' && item.video.path === state.transcript.filePath; });
     if (tab) { tab.transcriptProgress = progress.percent; updateTranscriptControls(tab); }
+    applyRunningFlag(state.transcript.filePath);
   });
   document.addEventListener("keydown", function(event) { if (event.key === "Escape") { if (state.favoritesOpen) closeFavorites(); if (state.recentVideosOpen) closeRecentVideos(); closeCtxMenu(); } }); document.addEventListener("click", function() { closeCtxMenu(); });
   applyTheme("dark", false); updateFavoritesButton(); updateRecentVideosButton();
@@ -1011,7 +1012,7 @@
     $("#sort").addEventListener("change", function(event) { state.sort = event.target.value; state.page = 1; renderFolder(); });
     var columnsButton = $("#toggleColumns");
     if (columnsButton) columnsButton.addEventListener("click", function() { state.extraColumns = !state.extraColumns; try { localStorage.setItem("folder-video-extra-columns", String(state.extraColumns)); } catch (error) {} renderFolder(); });
-    if (state.extraColumns) hydrateExtraColumns(rows);
+    if (state.extraColumns) { bindTranscriptFlags(rows); hydrateExtraColumns(rows); }
     $("#direction").addEventListener("click", function() { state.asc = !state.asc; state.page = 1; renderFolder(); });
     var content = $("#folderContent");
     content.addEventListener("dragover", function(event) { event.preventDefault(); });
@@ -1068,10 +1069,43 @@
   function rowElement(filePath) { return Array.prototype.find.call(document.querySelectorAll(".row"), function(row) { return row.dataset.path === filePath; }); }
   function applyTranscriptFlag(video, result) {
     var row = rowElement(video.path), flag = row && row.querySelector(".transcript-flag"); if (!flag) return;
+    if (state.transcript && state.transcript.filePath === video.path) { applyRunningFlag(video.path); return; }
+    flag.style.removeProperty("--p");
     var ok = result && result.available, text = ok ? "Есть транскрипция" : result && result.stale ? "Транскрипция устарела: файл изменился" : "Транскрипции нет";
     flag.className = "transcript-flag " + (ok ? "is-yes" : result && result.stale ? "is-stale" : "is-no");
     flag.textContent = ok ? "✓ Есть" : result && result.stale ? "↻ Устарела" : "— Нет";
+    if (!ok) text += ". Нажмите, чтобы запустить транскрибацию";
     flag.title = text; flag.setAttribute("aria-label", text);
+  }
+  // Индикатор-«градусник» на кнопке строки, пока идёт транскрибация этого файла.
+  function applyRunningFlag(filePath) {
+    var row = rowElement(filePath), flag = row && row.querySelector(".transcript-flag"); if (!flag || !state.transcript || state.transcript.filePath !== filePath) return;
+    var percent = Math.round(state.transcript.progress || 0), text = "Транскрибация: " + percent + "%. Нажмите, чтобы отменить";
+    flag.className = "transcript-flag is-running"; flag.style.setProperty("--p", percent + "%"); flag.textContent = percent + "%"; flag.title = text; flag.setAttribute("aria-label", text);
+  }
+  async function startRowTranscript(video) {
+    if (state.transcript && state.transcript.filePath === video.path) { await window.folderVideo.cancelTranscript(state.transcript.operationId); return; }
+    if (state.transcript) { notice("Сначала дождитесь завершения другой транскрибации."); return; }
+    var operationId = "transcript-" + Date.now() + "-" + Math.random().toString(16).slice(2), filePath = video.path;
+    state.transcript = { operationId: operationId, filePath: filePath, progress: 0 }; applyRunningFlag(filePath);
+    var result = await window.folderVideo.startTranscript(filePath, operationId);
+    if (!state.transcript || state.transcript.operationId !== operationId) return;
+    state.transcript = null;
+    state.tabs.forEach(function(tab) { if (tab.type === "player" && tab.video.path === filePath && tab.transcriptStatus !== "running") { tab.transcriptStatus = null; tab.transcriptSegments = []; tab.summaryData = null; tab.summaryStatus = null; } });
+    if (result && result.error) notice(result.error);
+    else if (result && !result.canceled) notice("Транскрипция готова", true);
+    var after = null; try { after = await window.folderVideo.hasTranscript(filePath); } catch (error) { after = null; }
+    applyTranscriptFlag(video, after);
+  }
+  function bindTranscriptFlags(videos) {
+    document.querySelectorAll(".transcript-flag").forEach(function(flag) {
+      flag.addEventListener("click", function(event) {
+        if (flag.classList.contains("is-yes") || flag.classList.contains("is-checking")) { if (flag.classList.contains("is-checking")) event.stopPropagation(); return; }
+        event.stopPropagation();
+        var video = videos.find(function(item) { return item.path === flag.dataset.flag; });
+        if (video) startRowTranscript(video);
+      });
+    });
   }
   function applyPublishedCell(video) {
     var row = rowElement(video.path), cell = row && row.querySelector(".row-published"); if (!cell) return;
