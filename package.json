@@ -1,6 +1,6 @@
 {
   "name": "folder-video",
-  "version": "1.0.40",
+  "version": "1.0.41",
   "description": "Локальный браузер папок с видео и покадровым просмотром.",
   "main": "src/main/main.js",
   "scripts": {
