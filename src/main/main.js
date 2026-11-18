@@ -12,8 +12,9 @@ const { hashFile } = require('./hash-file');
 const { createSameFileMoveConflict } = require('./move-file-conflict');
 const { UNDO_DIRECTORY, CutUndoStore } = require('./cut-undo');
 const { reencodeCodecArguments } = require('../shared/cut-core');
-const { probeDuration, listKeyframes, planCut, executeCut } = require('./cut-ffmpeg');
+const { probeDuration, listKeyframes, planCut, executeCut, runCapture } = require('./cut-ffmpeg');
 const { shiftNotes } = require('../shared/notes-core');
+const transcriptCore = require('../shared/transcript-store-core');
 const { createTranscriptStore } = require('./transcript-store');
 const { environmentStatus, listModels, environmentDirectory, downloadEnvironment, cancelDownload, isDownloading } = require('./transcribe-env');
 const { isSummaryFresh } = require('../shared/transcript-store-core');
@@ -500,7 +501,43 @@ function outputPathForSpeedUp(filePath) {
 
 function transcriptDirectory() { return appSettings?.storage?.transcriptDirectory || defaultTranscriptDirectory(); }
 function transcriptKey(filePath) { return createHash('sha256').update(filePath).digest('hex').slice(0, 12); }
-const transcriptStore = createTranscriptStore({ getDirectory: transcriptDirectory, appId: 'folder-video' });
+// Код ролика и вариант копии: метаданные файла (purl/comment/variant), ссылка YouTube у видео, ссылка в метаданных Folder-video.
+// Код в имени файла store проверяет сам; здесь — источники, которых в имени нет.
+async function readSourceInfo(filePath, sha256) {
+  const info = {};
+  try {
+    const out = await Promise.race([
+      runCapture('ffprobe', ['-v', 'error', '-show_entries', 'format_tags', '-of', 'json', filePath]),
+      new Promise((_resolve, reject) => setTimeout(() => reject(new Error('ffprobe: таймаут')), 15000))
+    ]);
+    const tags = JSON.parse(out).format?.tags || {};
+    const lower = Object.fromEntries(Object.entries(tags).map(([key, value]) => [key.toLowerCase(), String(value)]));
+    for (const value of [lower.purl, lower.comment, lower.description, lower.source]) {
+      const id = value ? transcriptCore.youtubeIdFromUrl(value.trim().split(/\s+/)[0]) : '';
+      if (id) { info.youtubeId = id; break; }
+    }
+    const variant = lower.variant ? transcriptCore.parseVariantLabel(lower.variant) : null;
+    if (variant) info.variant = variant;
+  } catch { /* ffprobe нет или файл не читается — берём остальные источники */ }
+  if (!info.youtubeId && !transcriptCore.youtubeIdFromFileName(filePath)) {
+    const url = await readLinkedYoutubeUrl(filePath);
+    const id = url ? transcriptCore.youtubeIdFromUrl(url) : '';
+    if (id) info.youtubeId = id;
+  }
+  if (!info.youtubeId && !transcriptCore.youtubeIdFromFileName(filePath) && metadataStore && sha256) {
+    try {
+      const metadata = JSON.parse(await readFile(metadataStore.filePath(sha256), 'utf8'));
+      const id = typeof metadata.youtubeUrl === 'string' ? transcriptCore.youtubeIdFromUrl(metadata.youtubeUrl) : '';
+      if (id) info.youtubeId = id;
+    } catch { /* метаданных нет */ }
+  }
+  return info;
+}
+const transcriptStore = createTranscriptStore({
+  getDirectory: transcriptDirectory, appId: 'folder-video', getSourceInfo: readSourceInfo,
+  cacheFile: () => path.join(app.getPath('userData'), 'content-hash-cache.json'),
+  unmigratedFile: () => path.join(app.getPath('userData'), 'transcripts-unmigrated.json')
+});
 function transcriptPaths(filePath) { return transcriptStore.paths(filePath); }
 function notesPath(filePath) { return transcriptStore.paths(filePath).notesPath; }
 async function validateNotesVideo(filePath) {
@@ -510,7 +547,7 @@ async function validateNotesVideo(filePath) {
   return stat;
 }
 async function loadNotes(filePath) {
-  try { const stat = await validateNotesVideo(filePath); await transcriptStore.relocate(filePath, stat).catch(() => {}); }
+  try { const stat = await validateNotesVideo(filePath); await transcriptStore.prepare(filePath, stat).catch(() => {}); }
   catch (error) { return { error: error.message || 'Не удалось открыть видео' }; }
   try { return { text: await readFile(notesPath(filePath), 'utf8') }; }
   catch (error) { return error.code === 'ENOENT' ? { text: '' } : { error: error.message || 'Не удалось открыть заметки' }; }
@@ -520,7 +557,8 @@ function saveNotes(filePath, text) {
   const previous = notesSaveJobs.get(filePath) || Promise.resolve();
   const job = previous.catch(() => {}).then(async () => {
     try {
-      await validateNotesVideo(filePath);
+      const stat = await validateNotesVideo(filePath);
+      await transcriptStore.prepare(filePath, stat);
       await mkdir(transcriptDirectory(), { recursive: true });
       const target = notesPath(filePath);
       const temporary = `${target}.${process.pid}.tmp`;
@@ -543,16 +581,13 @@ async function readLinkedYoutubeUrl(filePath) {
     return youtubeLink.isYouTubeVideoUrl(result.url) ? result.url : '';
   } catch { return ''; }
 }
-// withYoutube: если у видео нет своей транскрипции, показать транскрипцию привязанного ролика YouTube (только чтение).
-async function loadTranscript(filePath, withYoutube = false) {
+// Набор файлов видео определяется кодом ролика (если известен) или содержимым файла; транскрипция ролика от Radar/Окошка подхватывается тем же ключом.
+async function loadTranscript(filePath) {
   if (typeof filePath !== 'string' || !VIDEO_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return { error: 'Некорректный путь к видео' };
   let stat;
   try { stat = await lstat(filePath); if (!stat.isFile()) return { error: 'Указанный путь не является файлом' }; }
   catch (error) { return { error: error.message || 'Не удалось прочитать видео' }; }
-  const own = await transcriptStore.readOwn(filePath, stat);
-  if (!withYoutube || own.available || own.error) return own;
-  const linked = await readLinkedYoutubeUrl(filePath);
-  return linked ? transcriptStore.read(filePath, stat, linked) : own;
+  return transcriptStore.readOwn(filePath, stat);
 }
 function cancelTranscriptJob(job) {
   job.canceled = true;
@@ -1017,7 +1052,7 @@ ipcMain.handle('folder-video:metadata-template', async () => {
 
 ipcMain.handle('folder-video:metadata-save', async (_event, metadata) => {
   const error = validateMetadata(metadata);
-  try { return error ? { error } : { metadata: await metadataStore.save(metadata) }; } catch (saveError) { return { error: saveError.message }; }
+  try { const saved = error ? null : await metadataStore.save(metadata); if (saved) transcriptStore.forgetAll(); return error ? { error } : { metadata: saved }; } catch (saveError) { return { error: saveError.message }; }
 });
 
 ipcMain.handle('folder-video:render-markdown', async (_event, markdown) => {
@@ -1091,6 +1126,7 @@ ipcMain.handle('folder-video:youtube-search', async (_event, filePath, durationS
 async function writeYoutubeLink(filePath, url) {
   const published = await fetchPublishedDate(url);
   const result = await writeAuthorUrl(filePath, url, published);
+  transcriptStore.forget(filePath);
   if (published) storePublishedDate(filePath, published, true);
   const warnings = [];
   if (!published) warnings.push('Дату публикации получить не удалось');
@@ -1421,6 +1457,7 @@ ipcMain.handle('folder-video:cut-start', async (event, filePath, operationId, ra
       return { success: true, outputPath, replaced: false, duration: executed.duration, ranges: plan.ranges, skipped: plan.skipped };
     }
     const oldHash = await hashFile(filePath).catch(() => null);
+    await transcriptStore.prepareFile(filePath).catch(() => {});
     const notesFile = notesPath(filePath);
     await (notesSaveJobs.get(filePath) || Promise.resolve()).catch(() => {});
     const entry = await cutUndoStore.commit({ sourcePath: filePath, tempPath: temporary, sidecars: [notesFile], ranges: plan.ranges, precise: plan.precise });
@@ -1428,8 +1465,14 @@ ipcMain.handle('folder-video:cut-start', async (event, filePath, operationId, ra
     try {
       const notes = await readFile(notesFile, 'utf8');
       const shifted = shiftNotes(notes, plan.ranges);
-      if (shifted !== notes) { if (shifted) await writeFile(notesFile, shifted, 'utf8'); else await rm(notesFile, { force: true }); }
-    } catch (error) { if (error.code !== 'ENOENT') console.error('Не удалось пересчитать заметки:', error.message); }
+      // Содержимое видео изменилось: набор с ключом по содержимому стал другим, заметки (пересчитанные) переходят к новому набору.
+      transcriptStore.forget(filePath);
+      await transcriptStore.prepareFile(filePath).catch(() => {});
+      const newNotesFile = notesPath(filePath);
+      if (shifted) await writeFile(newNotesFile, shifted, 'utf8');
+      if (newNotesFile !== notesFile) await rm(notesFile, { force: true });
+      else if (!shifted) await rm(notesFile, { force: true });
+    } catch (error) { transcriptStore.forget(filePath); if (error.code !== 'ENOENT') console.error('Не удалось пересчитать заметки:', error.message); }
     if (oldHash) hashFile(filePath).then(newHash => newHash !== oldHash ? metadataStore.copy(oldHash, newHash, path.basename(filePath)) : null).catch(() => {});
     sendProgress(100);
     return { success: true, outputPath: filePath, replaced: true, undoId: entry.id, duration: executed.duration, ranges: plan.ranges, skipped: plan.skipped };
@@ -1477,10 +1520,10 @@ ipcMain.handle('folder-video:cut-undo', async (_event, undoId) => {
 ipcMain.handle('folder-video:cut-list-backups', async () => { try { return { backups: await cutUndoStore.list() }; } catch (error) { return { error: error.message }; } });
 ipcMain.handle('folder-video:cut-clear-backups', async () => { try { return { removed: await cutUndoStore.clear() }; } catch (error) { return { error: error.message }; } });
 
-ipcMain.handle('folder-video:transcript-load', async (_event, filePath) => loadTranscript(filePath, true));
+ipcMain.handle('folder-video:transcript-load', async (_event, filePath) => loadTranscript(filePath));
 // Лёгкая проверка для колонки списка: есть ли актуальная транскрипция у файла (без запроса ссылки YouTube).
 ipcMain.handle('folder-video:transcript-exists', async (_event, filePath) => {
-  const result = await loadTranscript(filePath, false);
+  const result = await loadTranscript(filePath);
   return { available: Boolean(result.available), stale: Boolean(result.stale) };
 });
 ipcMain.handle('folder-video:transcript-start', async (event, filePath, operationId) => {
@@ -1507,6 +1550,7 @@ ipcMain.handle('folder-video:summary-cancel', (_event, filePath) => {
 });
 ipcMain.handle('folder-video:transcript-file-action', async (event, filePath, action) => {
   if (typeof filePath !== 'string' || !VIDEO_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return { error: 'Некорректный путь к видео' };
+  await transcriptStore.prepareFile(filePath).catch(() => {});
   const { srtPath } = transcriptPaths(filePath);
   const exists = await lstat(srtPath).then(info => info.isFile(), () => false);
   if (!exists) return { error: 'Файл транскрипции ещё не создан: сначала транскрибируйте видео.' };
@@ -1552,6 +1596,18 @@ ipcMain.handle('folder-video:set-title', (event, folderPath) => {
   BrowserWindow.fromWebContents(event.sender)?.setTitle(title);
 });
 
+// Перенос наборов файлов на единое именование (docs/transcript-store.md): разово по кнопке и лениво при открытии видео.
+ipcMain.handle('folder-video:transcripts-migrate', async event => {
+  const result = await transcriptStore.migrateAll(progress => { if (!event.sender.isDestroyed()) event.sender.send('folder-video:transcripts-migrate-progress', progress); });
+  return result;
+});
+ipcMain.handle('folder-video:transcripts-unmigrated', () => transcriptStore.listUnmigrated());
+ipcMain.handle('folder-video:transcripts-retry', (_event, stem) => transcriptStore.retryUnmigrated(String(stem)));
+ipcMain.handle('folder-video:transcripts-adopt', async (_event, stem) => {
+  const selection = await dialog.showOpenDialog(mainWindow, { title: 'Указать видео для транскрипции', properties: ['openFile'], filters: [{ name: 'Видео', extensions: [...VIDEO_EXTENSIONS].map(item => item.replace('.', '')) }] });
+  if (selection.canceled || !selection.filePaths[0]) return { canceled: true };
+  return transcriptStore.adoptUnmigrated(String(stem), selection.filePaths[0]);
+});
 ipcMain.handle('folder-video:transcribe-env-status', () => environmentStatus(appSettings));
 ipcMain.handle('folder-video:transcribe-model-list', () => listModels(appSettings));
 ipcMain.handle('folder-video:choose-model-file', async () => {

@@ -64,6 +64,15 @@ contextBridge.exposeInMainWorld('folderVideo', {
     ipcRenderer.on('folder-video:transcript-progress', listener);
     return () => ipcRenderer.removeListener('folder-video:transcript-progress', listener);
   },
+  migrateTranscripts: () => ipcRenderer.invoke('folder-video:transcripts-migrate'),
+  onMigrateTranscriptsProgress: callback => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on('folder-video:transcripts-migrate-progress', listener);
+    return () => ipcRenderer.removeListener('folder-video:transcripts-migrate-progress', listener);
+  },
+  listUnmigratedTranscripts: () => ipcRenderer.invoke('folder-video:transcripts-unmigrated'),
+  retryUnmigratedTranscript: stem => ipcRenderer.invoke('folder-video:transcripts-retry', stem),
+  adoptUnmigratedTranscript: stem => ipcRenderer.invoke('folder-video:transcripts-adopt', stem),
   getTranscribeEnvironment: () => ipcRenderer.invoke('folder-video:transcribe-env-status'),
   listTranscribeModels: () => ipcRenderer.invoke('folder-video:transcribe-model-list'),
   chooseModelFile: () => ipcRenderer.invoke('folder-video:choose-model-file'),

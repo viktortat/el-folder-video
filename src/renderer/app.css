@@ -453,3 +453,4 @@ body.light .transcript-flag.is-stale { background:#fbf1d6; border-color:#d9b55a;
 .transcript-flag.is-no:hover { border-color:#a98dff; color:#e4dcff; }
 .transcript-flag.is-running { border-color:#7457b9; color:#fff; background:linear-gradient(90deg,#5b3fb0 var(--p,0%),#1b2029 var(--p,0%)); }
 body.light .transcript-flag.is-running { color:#2a1a66; background:linear-gradient(90deg,#c9b8ff var(--p,0%),#f1f4f9 var(--p,0%)); border-color:#7655cc; }
+.unmigrated-item { align-items:flex-start; flex-wrap:wrap; }.unmigrated-item .favorite-copy { flex:1 1 100%; }.unmigrated-reason { color:#d8a45f; font-size:11px; white-space:normal; }.unmigrated-item .settings-reset { height:28px; padding:0 10px; }body.light .unmigrated-reason { color:#a96a12; }

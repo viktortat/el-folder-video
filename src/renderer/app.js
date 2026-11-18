@@ -801,6 +801,53 @@
   function settingsIconMarkup(section) {
     return '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + section.icon + '"></path></svg>';
   }
+  function closeUnmigrated() { var overlay = $("#unmigratedOverlay"); if (overlay) overlay.remove(); }
+  async function renderUnmigratedPanel() {
+    closeFavorites(); closeRecentVideos(); closeUnmigrated();
+    var list = await window.folderVideo.listUnmigratedTranscripts();
+    var overlay = document.createElement("div"); overlay.id = "unmigratedOverlay"; overlay.className = "favorites-overlay";
+    var items = list.map(function(entry) {
+      return "<li class=\"favorite-item unmigrated-item\" data-stem=\"" + escapeHtml(entry.stem) + "\"><span class=\"favorite-copy\"><strong>" + escapeHtml(entry.title || entry.stem) + "</strong><span title=\"" + escapeHtml(entry.sourcePath || "") + "\">" + escapeHtml(entry.sourcePath || "") + "</span><span class=\"unmigrated-reason\">" + escapeHtml(entry.reason || "") + "</span></span><button class=\"unmigrated-adopt settings-reset\" data-stem=\"" + escapeHtml(entry.stem) + "\" type=\"button\" title=\"Выбрать видео, к которому относится эта транскрипция\" aria-label=\"Указать видео для: " + escapeHtml(entry.title || entry.stem) + "\">Указать видео</button><button class=\"unmigrated-retry settings-reset\" data-stem=\"" + escapeHtml(entry.stem) + "\" type=\"button\" title=\"Повторить перенос по прежнему пути\" aria-label=\"Повторить перенос: " + escapeHtml(entry.title || entry.stem) + "\">Повторить</button></li>";
+    }).join("");
+    overlay.innerHTML = "<section class=\"favorites-panel\" role=\"dialog\" aria-modal=\"true\" aria-label=\"Неперенесённые транскрипции\"><header><strong>Неперенесённые транскрипции</strong><span>" + list.length + "</span><button id=\"closeUnmigrated\" title=\"Закрыть список\" aria-label=\"Закрыть список\">×</button></header>" + (items ? "<ul>" + items + "</ul>" : "<p class=\"favorites-empty\">Все наборы перенесены.</p>") + "</section>";
+    overlay.addEventListener("click", function(event) { if (event.target === overlay) closeUnmigrated(); });
+    document.body.appendChild(overlay);
+    $("#closeUnmigrated").addEventListener("click", closeUnmigrated);
+    overlay.querySelectorAll(".unmigrated-adopt").forEach(function(button) {
+      button.addEventListener("click", async function() {
+        var result = await window.folderVideo.adoptUnmigratedTranscript(button.dataset.stem);
+        if (result.canceled) return;
+        if (result.error) notice(result.error); else notice("Транскрипция перенесена", true);
+        renderUnmigratedPanel();
+      });
+    });
+    overlay.querySelectorAll(".unmigrated-retry").forEach(function(button) {
+      button.addEventListener("click", async function() {
+        var result = await window.folderVideo.retryUnmigratedTranscript(button.dataset.stem);
+        if (result.error) notice(result.error); else notice("Транскрипция перенесена", true);
+        renderUnmigratedPanel();
+      });
+    });
+  }
+  function setupTranscriptMigration() {
+    var button = $("#migrateTranscripts"), status = $("#migrateStatus"), show = $("#showUnmigrated");
+    if (!button) return;
+    async function refreshCount() {
+      var list = await window.folderVideo.listUnmigratedTranscripts();
+      show.textContent = list.length ? "Неперенесённые (" + list.length + ")" : "Неперенесённые";
+    }
+    if (state.migrateProgressOff) state.migrateProgressOff();
+    state.migrateProgressOff = window.folderVideo.onMigrateTranscriptsProgress(function(progress) { var element = $("#migrateStatus"); if (element) element.textContent = "Перенос: " + progress.done + " из " + progress.total; });
+    button.addEventListener("click", async function() {
+      button.disabled = true; status.textContent = "Перенос…";
+      var result = await window.folderVideo.migrateTranscripts();
+      button.disabled = false;
+      status.textContent = "Готово: перенесено " + result.migrated + " из " + result.total + (result.remaining ? ". Не перенесено: " + result.remaining + " — см. список «Неперенесённые»." : ".");
+      refreshCount();
+    });
+    show.addEventListener("click", function() { renderUnmigratedPanel(); });
+    refreshCount();
+  }
   function setupTranscribeEnvironment() {
     var status = $("#envStatus"), model = $("#envDownloadModel"), library = $("#envDownloadLibrary"), cancel = $("#envCancel");
     var labels = { settings: "из настроек", environment: "из папки окружения", huggingface: "из кэша HuggingFace" };
@@ -832,6 +879,7 @@
       var rows = SETTINGS_FIELDS.filter(function(field) { return section.groups.includes(field.group); }).map(function(field) { return (field.key === "transcription.modelPath" ? '<div class="settings-row"><label class="settings-label" for="modelPicker"><strong>Модель распознавания</strong><small>Модели из папки окружения и кэша HuggingFace. «Автоматически» — первая найденная.</small></label><div class="settings-control"><select id="modelPicker" title="Выбрать модель распознавания" aria-label="Выбрать модель распознавания"><option value="">Автоматически</option></select></div></div>' : "") + settingsFieldMarkup(field, tab); }).join("");
       if (section.id === "updates") rows += '<div class="settings-row"><div class="settings-label"><strong>Проверка версии</strong><small id="updateStatus" class="update-status" role="status" aria-live="polite"></small></div><div class="settings-control"><button id="checkUpdates" class="settings-reset" type="button" title="Проверить наличие новой версии Folder-video" aria-label="Проверить обновление Folder-video">Проверить обновление</button></div></div>';
       if (section.id === "transcription") rows += '<div class="settings-row"><div class="settings-label"><strong>Окружение распознавания</strong><small id="envStatus" class="update-status" role="status" aria-live="polite">Проверка…</small></div><div class="settings-control"><button id="envDownloadModel" class="settings-reset" type="button" title="Скачать модель Parakeet Ultra в папку окружения" aria-label="Скачать модель распознавания">Скачать модель</button> <button id="envDownloadLibrary" class="settings-reset" type="button" title="Скачать библиотеку transcribe в папку окружения" aria-label="Скачать библиотеку распознавания">Скачать библиотеку</button> <button id="envCancel" class="settings-reset" type="button" hidden title="Отменить скачивание" aria-label="Отменить скачивание">Отмена</button></div></div>';
+      if (section.id === "transcription") rows += '<div class="settings-row"><div class="settings-label"><strong>Единый формат файлов</strong><small id="migrateStatus" class="update-status" role="status" aria-live="polite">Старые наборы (имя по пути к файлу) переименовываются при открытии видео; здесь можно перенести все сразу.</small></div><div class="settings-control"><button id="migrateTranscripts" class="settings-reset" type="button" title="Переименовать все старые наборы транскрипций в единый формат" aria-label="Перенести транскрипции в единый формат">Перенести все</button> <button id="showUnmigrated" class="settings-reset" type="button" title="Наборы, которые не удалось перенести" aria-label="Показать неперенесённые транскрипции">Неперенесённые</button></div></div>';
       var backups = section.id === "cut" ? '<div class="settings-group"><header class="settings-card-heading"><h3>Бэкапы вырезки</h3></header><div id="cutBackups" class="cut-backups">Загрузка…</div></div>' : "";
       return '<section id="settings-' + section.id + '" class="settings-section" aria-labelledby="settings-title-' + section.id + '"><header class="settings-section-heading"><h2 id="settings-title-' + section.id + '">' + escapeHtml(section.label) + '</h2><p>' + escapeHtml(section.hint) + '</p></header><div class="settings-group">' + rows + '</div>' + backups + '</section>';
     }).join("");
@@ -880,6 +928,7 @@
     modelInput.addEventListener("input", function() { var value = modelInput.value.trim(); if (!Array.from(picker.options).some(function(option) { return option.value === value; })) fillModelPicker(); else picker.value = value; });
     fillModelPicker();
     setupTranscribeEnvironment();
+    setupTranscriptMigration();
     $("#resetSettings").addEventListener("click", async function() { if (!confirm("Сбросить настройки к значениям по умолчанию?")) return; var result = await window.folderVideo.getDefaultSettings(); tab.draft = result.settings; tab.dirty = true; renderSettings(tab); });
     $("#settingsForm").addEventListener("submit", function(event) { event.preventDefault(); saveSettingsTab(tab); });
     renderCutBackups();

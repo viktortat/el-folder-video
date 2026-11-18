@@ -50,9 +50,9 @@ test('актуальность сводки зависит только от х�
   assert.equal(core.isSummaryFresh(null, 'abc'), false);
 });
 
-test('сборка манифеста v2 хранит только имя модели', () => {
+test('сборка манифеста v3 хранит только имя модели', () => {
   const m = core.buildManifest({ source: core.fileManifestSource({ ...signature, sha256: 'ff' }), model: 'C:\\m\\x.gguf', createdBy: 'folder-video', createdAt: '2026-01-01T00:00:00.000Z' });
-  assert.equal(m.version, 2);
+  assert.equal(m.version, 3);
   assert.equal(m.transcript.model, 'x.gguf');
   assert.equal(m.source.sha256, 'ff');
   assert.equal(core.readManifest(m).transcript.createdBy, 'folder-video');
@@ -85,4 +85,48 @@ test('SRT совпадает с форматом прежнего скрипта
   const srt = core.toSrt([{ start: 0, end: 2.5, text: 'Первая фраза.' }, { start: 3, end: 5, text: 'Вторая фраза.' }]);
   assert.equal(srt, fs.readFileSync(fixture('sample.srt'), 'utf8'));
   assert.equal(core.srtTime(3723.456), '01:02:03,456');
+});
+
+test('имена наборов: ролик, вариант копии, локальный файл', () => {
+  const hash = 'ab'.repeat(32);
+  assert.equal(core.fileKeyStem(hash), 'file-abababababababab');
+  assert.throws(() => core.fileKeyStem('xyz'));
+  const variant = core.variantFromFileName('Ролик [dQw4w9WgXcQ] (RU)_2x.mp4');
+  assert.deepEqual(variant, { label: 'RU_2x', language: 'ru', speed: 2 });
+  assert.equal(core.stemFor({ youtubeId: 'dQw4w9WgXcQ', variant, sha256: hash }), 'yt-dQw4w9WgXcQ.RU_2x');
+  assert.equal(core.stemFor({ youtubeId: 'dQw4w9WgXcQ', variant: null, sha256: hash }), 'yt-dQw4w9WgXcQ');
+  assert.equal(core.stemFor({ sha256: hash }), 'file-abababababababab');
+});
+
+test('вариант по имени: язык, скорость, оригинал без суффиксов', () => {
+  assert.equal(core.variantFromFileName('a (UK)_2x.mp4').label, 'UK_2x');
+  assert.equal(core.variantFromFileName('a (RU).mp4').label, 'RU');
+  assert.equal(core.variantFromFileName('a_1.5x.mp4').label, '1.5x');
+  assert.equal(core.variantFromFileName('a_1x.mp4'), null);
+  assert.equal(core.variantFromFileName('обычное видео.mp4'), null);
+  assert.equal(core.parseVariantLabel('мусор'), null);
+});
+
+test('parseStem различает ролик, вариант, файл и старое имя', () => {
+  assert.deepEqual(core.parseStem('yt-dQw4w9WgXcQ'), { kind: 'youtube', id: 'dQw4w9WgXcQ', variant: null });
+  assert.equal(core.parseStem('yt-dQw4w9WgXcQ.RU_2x').variant.speed, 2);
+  assert.equal(core.parseStem('yt-dQw4w9WgXcQ.мусор'), null);
+  assert.deepEqual(core.parseStem('file-0123456789abcdef'), { kind: 'file', key: '0123456789abcdef' });
+  assert.deepEqual(core.parseStem('Видео__0123456789ab'), { kind: 'legacy', name: 'Видео', pathHash: '0123456789ab' });
+  assert.equal(core.parseStem('Видео__0123456789ab.summary'), null);
+});
+
+test('код ролика: из имени с [id] и из ссылки', () => {
+  assert.equal(core.youtubeIdFromFileName('A [dQw4w9WgXcQ] (RU)_2x.mp4'), 'dQw4w9WgXcQ');
+  assert.equal(core.youtubeIdFromFileName('A.mp4'), '');
+  assert.equal(core.youtubeIdFromUrl('https://youtu.be/dQw4w9WgXcQ'), 'dQw4w9WgXcQ');
+  assert.equal(core.youtubeIdFromUrl('https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=5'), 'dQw4w9WgXcQ');
+  assert.equal(core.youtubeIdFromUrl('мусор'), '');
+});
+
+test('свежесть по хэшу содержимого при его наличии', () => {
+  const manifest = core.buildManifest({ source: core.fileManifestSource({ filePath: 'D:\\a.mp4', size: 1, mtimeMs: 2, sha256: 'aa' }), createdBy: 'x' });
+  assert.equal(core.isTranscriptFresh(manifest, { filePath: 'E:\\other.mp4', size: 9, mtimeMs: 9, sha256: 'aa' }), true);
+  assert.equal(core.isTranscriptFresh(manifest, { filePath: 'D:\\a.mp4', size: 1, mtimeMs: 2, sha256: 'bb' }), false);
+  assert.equal(core.isTranscriptFresh(manifest, { filePath: 'D:\\a.mp4', size: 1, mtimeMs: 2 }), true);
 });
