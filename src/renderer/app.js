@@ -2025,7 +2025,7 @@
     togglePlayback.addEventListener("click", function() {
       if (player.paused || player.ended) {
         var attempt = player.play();
-        if (attempt && attempt.catch) attempt.catch(function(error) { updatePlaybackButton(); notice("Не удалось запустить видео: " + (error && error.message ? error.message : error)); });
+        if (attempt && attempt.catch) attempt.catch(function(error) { updatePlaybackButton(); if (error && error.name === "AbortError") return; notice("Не удалось запустить видео: " + (error && error.message ? error.message : error)); });
       } else player.pause();
       updatePlaybackButton();
     });
