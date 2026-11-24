@@ -674,7 +674,8 @@
     var holds = player && (player.src === video.url || player.currentSrc === video.url);
     var time = holds ? player.currentTime : 0, wasPlaying = holds && !player.paused;
     if (holds) releasePlayerResources(video.url); else releaseCaptureVideos(video.url);
-    try { return await action(); }
+    var result;
+    try { result = await action(); if (result && result.fileUrl) video.url = result.fileUrl; return result; }
     finally {
       if (holds && player.isConnected && !player.getAttribute("src")) {
         player.addEventListener("loadedmetadata", function restore() {

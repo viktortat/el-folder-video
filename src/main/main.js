@@ -1123,6 +1123,10 @@ ipcMain.handle('folder-video:youtube-search', async (_event, filePath, durationS
     return { query, candidates, auto: youtubeLink.pickAutoCandidate(candidates, Number(durationSeconds) * youtubeLink.speedFactor(path.basename(filePath))) };
   } catch (error) { return { error: error.message }; }
 });
+// Свойства меняют размер файла: плееру нужен свежий адрес с новой версией, иначе Chromium берёт байты из кэша по старому.
+async function freshFileUrl(filePath) {
+  try { return toVideoItem(filePath, await lstat(filePath)).url; } catch { return ''; }
+}
 async function writeYoutubeLink(filePath, url) {
   const published = await fetchPublishedDate(url);
   const result = await writeAuthorUrl(filePath, url, published);
@@ -1131,7 +1135,7 @@ async function writeYoutubeLink(filePath, url) {
   const warnings = [];
   if (!published) warnings.push('Дату публикации получить не удалось');
   if (!result.datesIntact) warnings.push('Не удалось полностью сохранить даты файла');
-  return { url: result.url, published: result.published || '', warning: warnings.join('. ') };
+  return { url: result.url, published: result.published || '', warning: warnings.join('. '), fileUrl: await freshFileUrl(filePath) };
 }
 // После нативного window.confirm Windows оставляет окно без клавиатурного фокуса: поля ввода перестают принимать текст.
 ipcMain.handle('folder-video:refocus-window', event => {
@@ -1180,7 +1184,7 @@ ipcMain.handle('folder-video:youtube-date', async (_event, filePath, url) => {
     if (!published) return { published: '' };
     const result = await writePublishedDate(filePath, published);
     storePublishedDate(filePath, published, false);
-    return { published: result.published || '', warning: result.datesIntact ? '' : 'Не удалось полностью сохранить даты файла' };
+    return { published: result.published || '', warning: result.datesIntact ? '' : 'Не удалось полностью сохранить даты файла', fileUrl: await freshFileUrl(filePath) };
   } catch (error) { return { error: error.message }; }
 });
 ipcMain.handle('folder-video:youtube-open', async (_event, url) => {
