@@ -1120,7 +1120,7 @@ ipcMain.handle('folder-video:youtube-search', async (_event, filePath, durationS
     const query = youtubeLink.cleanSearchTitle(path.basename(filePath));
     if (!query) return { error: 'Не удалось получить название для поиска' };
     const candidates = await searchYouTube(query);
-    return { query, candidates, auto: youtubeLink.pickAutoCandidate(candidates, Number(durationSeconds)) };
+    return { query, candidates, auto: youtubeLink.pickAutoCandidate(candidates, Number(durationSeconds) * youtubeLink.speedFactor(path.basename(filePath))) };
   } catch (error) { return { error: error.message }; }
 });
 async function writeYoutubeLink(filePath, url) {
@@ -1133,6 +1133,11 @@ async function writeYoutubeLink(filePath, url) {
   if (!result.datesIntact) warnings.push('Не удалось полностью сохранить даты файла');
   return { url: result.url, published: result.published || '', warning: warnings.join('. ') };
 }
+// После нативного window.confirm Windows оставляет окно без клавиатурного фокуса: поля ввода перестают принимать текст.
+ipcMain.handle('folder-video:refocus-window', event => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win && !win.isDestroyed()) { win.focus(); event.sender.focus(); }
+});
 ipcMain.handle('folder-video:youtube-write', async (_event, filePath, url) => {
   try {
     if (!isSupportedVideoPath(filePath) || !youtubeLink.isWritableExtension(path.extname(filePath))) return { error: 'Формат не поддерживает запись свойства' };
@@ -1160,7 +1165,7 @@ ipcMain.handle('folder-video:youtube-batch-item', async (_event, filePath) => {
     if (!candidates.length) return { status: 'notfound', query };
     let duration = NaN;
     try { duration = await probeDuration(filePath); } catch { /* без ffprobe точное совпадение недоступно */ }
-    const auto = youtubeLink.pickAutoCandidate(candidates, Number(duration));
+    const auto = youtubeLink.pickAutoCandidate(candidates, Number(duration) * youtubeLink.speedFactor(path.basename(filePath)));
     if (!auto) return { status: 'ambiguous', query, count: candidates.length };
     const result = await writeYoutubeLink(filePath, auto.url);
     return { status: 'written', url: result.url, published: result.published, warning: result.warning };

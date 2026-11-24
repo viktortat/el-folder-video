@@ -253,7 +253,7 @@
         var video = await window.folderVideo.readVideo(button.dataset.path);
         if (video) { closeRecentVideos(); openVideo(video); return; }
         var item = state.recentVideos.find(function(entry) { return entry.path === button.dataset.path; });
-        if (item && window.confirm("Видео не найдено по сохранённому пути.\n\nНазвание: " + item.name + "\nПуть: " + item.path + "\n\nУдалить эту запись из списка?")) {
+        if (item && askConfirm("Видео не найдено по сохранённому пути.\n\nНазвание: " + item.name + "\nПуть: " + item.path + "\n\nУдалить эту запись из списка?")) {
           removeRecentVideo(item.path); renderRecentVideosPanel();
         }
       });
@@ -266,7 +266,7 @@
           hydrateRecentVideoThumbnail(item, video);
           return;
         }
-        if (window.confirm("Видео не найдено по сохранённому пути.\n\nНазвание: " + recent.name + "\nПуть: " + recent.path + "\n\nУдалить эту запись из списка последних видео?")) {
+        if (askConfirm("Видео не найдено по сохранённому пути.\n\nНазвание: " + recent.name + "\nПуть: " + recent.path + "\n\nУдалить эту запись из списка последних видео?")) {
           removeRecentVideo(recent.path); renderRecentVideosPanel();
         }
       });
@@ -328,7 +328,7 @@
           hydrateFavoriteThumbnail(item, video);
           return;
         }
-        if (window.confirm("Видео не найдено по сохранённому пути.\n\nНазвание: " + favorite.name + "\nПуть: " + favorite.path + "\n\nУдалить эту запись из избранного?")) removeMissingFavorite(favorite.path);
+        if (askConfirm("Видео не найдено по сохранённому пути.\n\nНазвание: " + favorite.name + "\nПуть: " + favorite.path + "\n\nУдалить эту запись из избранного?")) removeMissingFavorite(favorite.path);
       });
     });
   }
@@ -660,16 +660,34 @@
     var key = youtubeSourceKey(video), info = state.youtubeSourceCache.get(key);
     if (!info || info.mode !== "linked" || info.published || state.youtubeDateTried.has(key) || state.youtubeBusy.has(video.path)) return;
     state.youtubeDateTried.add(key);
-    var result = await window.folderVideo.fetchYoutubeDate(video.path, info.url);
+    var result = await withReleasedPlayer(video, function() { return window.folderVideo.fetchYoutubeDate(video.path, info.url); });
     if (!result || result.error || !result.published) return;
     var current = state.youtubeSourceCache.get(key);
     if (current && current.mode === "linked" && current.url === info.url) state.youtubeSourceCache.set(key, { mode: "linked", url: info.url, published: result.published });
     applyYoutubeButton(video);
     applyPublishedCell(video);
   }
+  // Пока плеер держит файл открытым, Проводник не может записать свойства (ERROR_SHARING_VIOLATION):
+  // на время записи освобождаем плеер и возвращаем позицию и воспроизведение.
+  async function withReleasedPlayer(video, action) {
+    var player = $("#player");
+    var holds = player && (player.src === video.url || player.currentSrc === video.url);
+    var time = holds ? player.currentTime : 0, wasPlaying = holds && !player.paused;
+    if (holds) releasePlayerResources(video.url); else releaseCaptureVideos(video.url);
+    try { return await action(); }
+    finally {
+      if (holds && player.isConnected && !player.getAttribute("src")) {
+        player.addEventListener("loadedmetadata", function restore() {
+          player.removeEventListener("loadedmetadata", restore);
+          try { player.currentTime = time; if (wasPlaying) player.play().catch(function() {}); } catch {}
+        });
+        player.src = video.url; player.load();
+      }
+    }
+  }
   async function saveYoutubeSource(video, url) {
     state.youtubeBusy.add(video.path); applyYoutubeButton(video);
-    var result = await window.folderVideo.writeYoutubeSource(video.path, url);
+    var result = await withReleasedPlayer(video, function() { return window.folderVideo.writeYoutubeSource(video.path, url); });
     state.youtubeBusy.delete(video.path);
     if (!result || result.error) { notice("Не удалось записать ссылку: " + (result && result.error ? result.error : "нет ответа")); applyYoutubeButton(video); return; }
     state.youtubeSourceCache.set(youtubeSourceKey(video), { mode: "linked", url: result.url, published: result.published || "" });
@@ -698,7 +716,7 @@
     overlay.querySelectorAll("[data-save]").forEach(function(button) { button.addEventListener("click", function() { var candidate = search.candidates[Number(button.dataset.save)]; closeYoutubePicker(); saveYoutubeSource(video, candidate.url); }); });
   }
   async function findYoutubeSource(video, player) {
-    if (!window.confirm("Искать исходник на YouTube по названию файла?\n\n" + video.name + "\n\nНазвание уйдёт в сеть (YouTube). Найденная ссылка и дата публикации ролика будут записаны в свойства файла («URL-адрес автора» и «Дата выпуска»); даты создания и изменения файла не изменятся.")) return;
+    if (!askConfirm("Искать исходник на YouTube по названию файла?\n\n" + video.name + "\n\nНазвание уйдёт в сеть (YouTube). Найденная ссылка и дата публикации ролика будут записаны в свойства файла («URL-адрес автора» и «Дата выпуска»); даты создания и изменения файла не изменятся.")) return;
     var fileDuration = player && Number.isFinite(player.duration) ? player.duration : NaN;
     state.youtubeBusy.add(video.path); applyYoutubeButton(video);
     var search = await window.folderVideo.searchYoutubeSource(video.path, fileDuration);
@@ -1106,7 +1124,7 @@
   // Колонки «Транскрипция» и «Дата на YouTube»: включаются кнопкой под списком, заполняются фоном по видимым строкам.
   function columnsBarMarkup() {
     var label = state.extraColumns ? "Скрыть колонки: транскрипция и дата YouTube" : "Показать колонки: транскрипция и дата YouTube";
-    return "<button id=\"toggleColumns\" class=\"columns-toggle" + (state.extraColumns ? " is-active" : "") + "\" type=\"button\" aria-pressed=\"" + state.extraColumns + "\" title=\"" + label + "\" aria-label=\"" + label + "\">▦</button>" + youtubeBatchMarkup() + transcriptBatchMarkup();
+    return "<div class=\"pager-tools\">" + "<button id=\"toggleColumns\" class=\"columns-toggle" + (state.extraColumns ? " is-active" : "") + "\" type=\"button\" aria-pressed=\"" + state.extraColumns + "\" title=\"" + label + "\" aria-label=\"" + label + "\">▦</button>" + youtubeBatchMarkup() + transcriptBatchMarkup() + "</div>";
   }
   // Пакетная транскрибация: все видео списка без актуальной транскрипции, по одному; «градусник» на кнопке — общий прогресс.
   var TRANSCRIPT_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>';
@@ -1129,11 +1147,12 @@
     var all = filteredFiles(), pending = [];
     notice("Проверяю, у каких видео уже есть транскрипция…", true);
     for (var i = 0; i < all.length; i++) {
+      notice("Проверяю, у каких видео уже есть транскрипция… " + i + " из " + all.length + " (первый раз считается хэш файлов — может занять несколько минут)", true);
       var status = null; try { status = await window.folderVideo.hasTranscript(all[i].path); } catch (error) { status = null; }
       if (!(status && status.available)) pending.push(all[i]);
     }
     if (!pending.length) { notice("У всех видео списка уже есть транскрипция.", true); return; }
-    if (!window.confirm("Транскрибировать видео: " + pending.length + " (из " + all.length + " в списке)?\n\nВидео обрабатываются по одному, это может занять много времени. Транскрипции сохраняются в общую папку транскрипций. Отмена — повторное нажатие на кнопку.")) return;
+    if (!askConfirm("Транскрибировать видео: " + pending.length + " (из " + all.length + " в списке)?\n\nВидео обрабатываются по одному, это может занять много времени. Транскрипции сохраняются в общую папку транскрипций. Отмена — повторное нажатие на кнопку.")) return;
     var folder = state.folderPath, batch = state.transcriptBatch = { total: pending.length, done: 0, canceled: false };
     var made = 0, failed = null;
     applyTranscriptBatchButton();
@@ -1164,6 +1183,8 @@
     button.outerHTML = youtubeBatchMarkup();
     var fresh = $("#youtubeBatch"); if (fresh) fresh.addEventListener("click", startYoutubeBatch);
   }
+  // Нативный confirm в Electron на Windows после закрытия отбирает фокус у окна — возвращаем его через main.
+  function askConfirm(message) { var answer = window.confirm(message); try { window.folderVideo.refocusWindow(); } catch (error) { /* без моста фокус вернётся кликом */ } return answer; }
   function closeBatchReport() { var overlay = $("#batchReportOverlay"); if (overlay) overlay.remove(); document.removeEventListener("keydown", batchReportKeydown); }
   function batchReportKeydown(event) { if (event.key === "Escape") closeBatchReport(); }
   function showBatchReport(report, canceled) {
@@ -1183,14 +1204,14 @@
     document.addEventListener("keydown", batchReportKeydown);
     overlay.addEventListener("click", function(event) { if (event.target === overlay) closeBatchReport(); });
     $("#closeBatchReport").addEventListener("click", closeBatchReport);
-    overlay.querySelectorAll("[data-open]").forEach(function(button) { button.addEventListener("click", function() { closeBatchReport(); openVideoByPath(button.dataset.open); }); });
+    overlay.querySelectorAll("[data-open]").forEach(function(button) { button.addEventListener("click", function() { openVideoByPath(button.dataset.open); }); });
   }
   async function startYoutubeBatch() {
     if (state.youtubeBatch) { state.youtubeBatch.canceled = true; return; }
     if (state.cutJob || state.speedUp || state.transcript || state.transcriptBatch) { notice("Дождитесь завершения другой обработки видео."); return; }
     var videos = filteredFiles().filter(function(video) { return youtubeWritable(video.path); });
     if (!videos.length) { notice("В списке нет видео mp4, m4v или mov — для других форматов ссылка YouTube не хранится."); return; }
-    if (!window.confirm("Обработать видео: " + videos.length + "?\n\nИмена файлов уйдут в сеть (YouTube). Для каждого видео без ссылки будет найден исходник; запись — только при точном совпадении длительности. Уже заполненные свойства не перезаписываются. Даты создания и изменения файлов не изменятся.")) return;
+    if (!askConfirm("Обработать видео: " + videos.length + "?\n\nИмена файлов уйдут в сеть (YouTube). Для каждого видео без ссылки будет найден исходник; запись — только при точном совпадении длительности. Уже заполненные свойства не перезаписываются. Даты создания и изменения файлов не изменятся.")) return;
     var folder = state.folderPath, batch = state.youtubeBatch = { total: videos.length, done: 0, canceled: false };
     var report = { total: videos.length, written: [], date: [], manual: [], errors: [], skipped: 0 };
     applyYoutubeBatchButton();
@@ -1797,7 +1818,7 @@
     if (!tab.summaryData) { notice(tab.summaryStatus === "running" ? "Дождитесь завершения сводки." : "Сначала создайте сводку: нужны транскрипция и ключ DeepSeek."); return; }
     if (mode !== "append") {
       var existing = await window.folderVideo.getObsidianArticle(tab.video.path);
-      if (existing.exists && !window.confirm("Статья уже существует:\n" + existing.path + "\n\nПерезаписать её и скриншоты? Ручные правки в статье будут потеряны.")) return;
+      if (existing.exists && !askConfirm("Статья уже существует:\n" + existing.path + "\n\nПерезаписать её и скриншоты? Ручные правки в статье будут потеряны.")) return;
       if (tab.obsidianBusy) return;
     }
     var filePath = tab.video.path; var player = $("#player"); var button = $("#obsidianExport");

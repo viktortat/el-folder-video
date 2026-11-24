@@ -121,7 +121,7 @@ if ($env:FOLDER_VIDEO_MODE -eq 'read') {
 function runPowerShell(mode, filePath, url, date) {
   const encoded = Buffer.from(POWERSHELL_SCRIPT, 'utf16le').toString('base64');
   return new Promise((resolve, reject) => {
-    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-EncodedCommand', encoded], {
       windowsHide: true, env: { ...process.env, FOLDER_VIDEO_MODE: mode, FOLDER_VIDEO_FILE: filePath, FOLDER_VIDEO_URL: url || '', FOLDER_VIDEO_DATE: date || '' }
     });
     let output = ''; let errors = '';
@@ -131,6 +131,7 @@ function runPowerShell(mode, filePath, url, date) {
     child.on('error', error => { clearTimeout(timer); reject(error); });
     child.on('close', code => {
       clearTimeout(timer);
+      if (code !== 0 && /0x80070020|0x80070021/i.test(errors)) return reject(new Error('Файл занят другой программой — закройте её или остановите воспроизведение и повторите'));
       if (code !== 0) return reject(new Error(errors.replace(/\s+/g, ' ').trim().slice(0, 300) || 'Не удалось обработать свойство файла'));
       try { resolve(JSON.parse(output.trim().split(/\r?\n/).pop())); } catch { reject(new Error('Неожиданный ответ PowerShell')); }
     });

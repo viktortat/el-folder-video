@@ -23,6 +23,15 @@ function cleanSearchTitle(fileName) {
   return title;
 }
 
+// Коэффициент ускорения из хвоста имени («_2x», «_1.5x»): у такого файла длительность в столько раз короче оригинала.
+function speedFactor(fileName) {
+  const title = String(fileName || '').replace(VIDEO_EXTENSION_PATTERN, '').trim();
+  const stripped = title.replace(LANGUAGE_SUFFIX_PATTERN, '').trim();
+  const match = /_(\d+(?:\.\d+)?)x\s*$/i.exec(stripped);
+  const factor = match ? Number(match[1]) : 1;
+  return Number.isFinite(factor) && factor > 0 ? factor : 1;
+}
+
 function canonicalUrl(videoId) { return 'https://www.youtube.com/watch?v=' + videoId; }
 
 function isVideoId(value) { return typeof value === 'string' && /^[A-Za-z0-9_-]{11}$/.test(value); }
@@ -167,7 +176,7 @@ function parsePageDate(html) {
 function isWritableExtension(extension) { return WRITABLE_EXTENSIONS.has(String(extension || '').toLowerCase()); }
 
 const youtubeLinkCore = {
-  AUTO_PICK_TOLERANCE_SECONDS, MAX_CANDIDATES, cleanSearchTitle, canonicalUrl, isVideoId, isYouTubeVideoUrl, parseClockDuration,
+  AUTO_PICK_TOLERANCE_SECONDS, MAX_CANDIDATES, cleanSearchTitle, speedFactor, canonicalUrl, isVideoId, isYouTubeVideoUrl, parseClockDuration,
   parseSearchHtml, parseYtDlpOutput, parseYtDlpUploadDate, parsePageDate, pickAutoCandidate, isWritableExtension
 };
 if (typeof module !== 'undefined' && module.exports) module.exports = youtubeLinkCore;

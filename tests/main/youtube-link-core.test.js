@@ -77,3 +77,10 @@ test('дата публикации берётся со страницы рол�
   assert.equal(core.parsePageDate('{"uploadDate":"2021-12-25"}'), '2021-12-25');
   assert.equal(core.parsePageDate('<html></html>'), '');
 });
+
+test('speedFactor берёт коэффициент ускорения из хвоста имени', () => {
+  assert.equal(core.speedFactor('Урок (RU)_2x.mp4'), 2);
+  assert.equal(core.speedFactor('Lesson_1.5x.mkv'), 1.5);
+  assert.equal(core.speedFactor('Lesson.mp4'), 1);
+  assert.equal(core.pickAutoCandidate([{ duration: 580 }], 290 * core.speedFactor('Lesson_2x.mp4')).duration, 580);
+});

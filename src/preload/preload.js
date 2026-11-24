@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('folderVideo', {
   writeYoutubeSource: (filePath, url) => ipcRenderer.invoke('folder-video:youtube-write', filePath, url),
   fetchYoutubeDate: (filePath, url) => ipcRenderer.invoke('folder-video:youtube-date', filePath, url),
   youtubeBatchItem: filePath => ipcRenderer.invoke('folder-video:youtube-batch-item', filePath),
+  refocusWindow: () => ipcRenderer.invoke('folder-video:refocus-window'),
   openYoutubeSource: url => ipcRenderer.invoke('folder-video:youtube-open', url),
   openProjectFolder: folderPath => ipcRenderer.invoke('folder-video:open-project-folder', folderPath),
   syncMetadata: () => ipcRenderer.invoke('folder-video:sync-metadata'),
