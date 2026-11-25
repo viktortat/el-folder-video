@@ -660,20 +660,40 @@
     var key = youtubeSourceKey(video), info = state.youtubeSourceCache.get(key);
     if (!info || info.mode !== "linked" || info.published || state.youtubeDateTried.has(key) || state.youtubeBusy.has(video.path)) return;
     state.youtubeDateTried.add(key);
-    var result = await withReleasedPlayer(video, function() { return window.folderVideo.fetchYoutubeDate(video.path, info.url); });
+    var date = await window.folderVideo.fetchYoutubePublished(info.url);
+    if (!date || date.error || !date.published) return;
+    var result = await writeVideoProperties(video, "", date.published);
     if (!result || result.error || !result.published) return;
     var current = state.youtubeSourceCache.get(key);
     if (current && current.mode === "linked" && current.url === info.url) state.youtubeSourceCache.set(key, { mode: "linked", url: info.url, published: result.published });
     applyYoutubeButton(video);
     applyPublishedCell(video);
   }
-  // Пока плеер держит файл открытым, Проводник не может записать свойства (ERROR_SHARING_VIOLATION):
-  // на время записи освобождаем плеер и возвращаем позицию и воспроизведение.
+  function playerHolds(video) {
+    var player = $("#player");
+    return Boolean(player && (player.src === video.url || player.currentSrc === video.url));
+  }
+  // Запись свойств (url пустой — только дата). Пока плеер держит файл, Windows не даёт его менять, а первая запись
+  // переписывает файл целиком (секунды на больших видео). Поэтому открытый ролик продолжает играть, пока свойства
+  // пишутся в копию, а плеер отпускается только на мгновенную подмену файла.
+  async function writeVideoProperties(video, url, published) {
+    if (!playerHolds(video)) {
+      releaseCaptureVideos(video.url);
+      var direct = await window.folderVideo.writeYoutubeProperties(video.path, url, published, false);
+      if (direct && direct.fileUrl) video.url = direct.fileUrl;
+      return direct;
+    }
+    var staged = await window.folderVideo.writeYoutubeProperties(video.path, url, published, true);
+    if (!staged || staged.error) return staged;
+    return withReleasedPlayer(video, function() { return window.folderVideo.commitYoutubeProperties(staged.token); });
+  }
+  // Освобождает плеер на время action и возвращает ролик с прежней позиции, продолжая воспроизведение.
   async function withReleasedPlayer(video, action) {
     var player = $("#player");
-    var holds = player && (player.src === video.url || player.currentSrc === video.url);
+    var holds = playerHolds(video);
     var time = holds ? player.currentTime : 0, wasPlaying = holds && !player.paused;
-    if (holds) releasePlayerResources(video.url); else releaseCaptureVideos(video.url);
+    if (holds) releasePlayerResources(video.url);
+    releaseCaptureVideos(video.url);
     var result;
     try { result = await action(); if (result && result.fileUrl) video.url = result.fileUrl; return result; }
     finally {
@@ -688,7 +708,8 @@
   }
   async function saveYoutubeSource(video, url) {
     state.youtubeBusy.add(video.path); applyYoutubeButton(video);
-    var result = await withReleasedPlayer(video, function() { return window.folderVideo.writeYoutubeSource(video.path, url); });
+    var date = await window.folderVideo.fetchYoutubePublished(url);
+    var result = await writeVideoProperties(video, url, date && date.published ? date.published : "");
     state.youtubeBusy.delete(video.path);
     if (!result || result.error) { notice("Не удалось записать ссылку: " + (result && result.error ? result.error : "нет ответа")); applyYoutubeButton(video); return; }
     state.youtubeSourceCache.set(youtubeSourceKey(video), { mode: "linked", url: result.url, published: result.published || "" });

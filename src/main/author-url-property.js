@@ -5,13 +5,25 @@
 // «Свойства → Подробно»; «Дата создания мультимедиа» (System.Media.DateEncoded) для mp4 там пустая, хотя значение хранится)
 // и в System.Media.DateEncoded. Старые файлы с датой в «Дате выпуска» (System.Media.DateReleased) читаются как запасной вариант.
 // Запуск — только из main.js. Даты создания и изменения файла запоминаются до записи и возвращаются после неё.
+// Чтение идёт напрямую из бокса Xtra (mp4-xtra.js, миллисекунды); PowerShell нужен для записи и как запасной путь чтения.
 
 const { spawn } = require('node:child_process');
 const { normalizePublishedDate } = require('../shared/published-date-core');
+const { readXtraProperties } = require('./mp4-xtra');
 
-const POWERSHELL_SCRIPT = `
+// HRESULT 0x80070020 / 0x80070021: файл открыт другим процессом (обычно плеером).
+const SHARING_VIOLATIONS = new Set([-2147024864, -2147024863]);
+
+// String.raw: в скрипте есть \x и \u для экранирования ответа.
+const POWERSHELL_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+# Ответ — одна строка JSON только из ASCII: русские тексты ошибок не зависят от кодовой страницы консоли.
+function Write-Answer($value) {
+  $json = ConvertTo-Json -InputObject $value -Compress
+  [Console]::Out.WriteLine([regex]::Replace($json, '[^\x00-\x7F]', { param($m) '\u{0:x4}' -f [int][char]$m.Value }))
+}
+try {
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -90,6 +102,8 @@ public static class FvAuthorUrl {
 }
 '@
 $path = $env:FOLDER_VIDEO_FILE
+# Запись в копию: даты создания и изменения берутся у оригинала, чтобы после подмены они остались прежними.
+$timesFrom = if ($env:FOLDER_VIDEO_TIMES_FROM) { $env:FOLDER_VIDEO_TIMES_FROM } else { $path }
 function ReadPublished {
   $date = ''
   try { $p = [FvAuthorUrl]::ReadPublisher($path); if ($p -match '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') { $date = $p } } catch { }
@@ -98,9 +112,9 @@ function ReadPublished {
   $date
 }
 if ($env:FOLDER_VIDEO_MODE -eq 'read') {
-  @{ url = [FvAuthorUrl]::Read($path, 32); published = ReadPublished } | ConvertTo-Json -Compress
+  Write-Answer @{ url = [FvAuthorUrl]::Read($path, 32); published = ReadPublished }
 } else {
-  $item = Get-Item -LiteralPath $path -Force
+  $item = Get-Item -LiteralPath $timesFrom -Force
   $created = $item.CreationTimeUtc.Ticks; $modified = $item.LastWriteTimeUtc.Ticks
   if ($env:FOLDER_VIDEO_MODE -eq 'write') { [FvAuthorUrl]::Write($path, 32, $env:FOLDER_VIDEO_URL) }
   if ($env:FOLDER_VIDEO_DATE) {
@@ -114,15 +128,25 @@ if ($env:FOLDER_VIDEO_MODE -eq 'read') {
   if ($item.LastWriteTimeUtc.Ticks -ne $modified) { [IO.File]::SetLastWriteTimeUtc($path, [DateTime]::new($modified, 'Utc')); $restored = $false }
   $item = Get-Item -LiteralPath $path -Force
   $intact = ($item.CreationTimeUtc.Ticks -eq $created) -and ($item.LastWriteTimeUtc.Ticks -eq $modified)
-  @{ url = [FvAuthorUrl]::Read($path, 32); published = ReadPublished; datesChangedAndRestored = (-not $restored); datesIntact = $intact } | ConvertTo-Json -Compress
+  Write-Answer @{ url = [FvAuthorUrl]::Read($path, 32); published = ReadPublished; datesChangedAndRestored = (-not $restored); datesIntact = $intact }
+}
+} catch {
+  $e = $_.Exception; while ($e.InnerException) { $e = $e.InnerException }
+  Write-Answer @{ error = $e.Message; hresult = $e.HResult }
+  exit 1
 }
 `;
 
-function runPowerShell(mode, filePath, url, date) {
+function answerError(answer) {
+  if (SHARING_VIOLATIONS.has(answer.hresult)) return new Error('Файл занят другой программой — закройте её и повторите');
+  return new Error(answer.error || 'Не удалось обработать свойство файла');
+}
+
+function runPowerShell(mode, filePath, url, date, timesFrom) {
   const encoded = Buffer.from(POWERSHELL_SCRIPT, 'utf16le').toString('base64');
   return new Promise((resolve, reject) => {
-    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-EncodedCommand', encoded], {
-      windowsHide: true, env: { ...process.env, FOLDER_VIDEO_MODE: mode, FOLDER_VIDEO_FILE: filePath, FOLDER_VIDEO_URL: url || '', FOLDER_VIDEO_DATE: date || '' }
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
+      windowsHide: true, env: { ...process.env, FOLDER_VIDEO_MODE: mode, FOLDER_VIDEO_FILE: filePath, FOLDER_VIDEO_URL: url || '', FOLDER_VIDEO_DATE: date || '', FOLDER_VIDEO_TIMES_FROM: timesFrom || '' }
     });
     let output = ''; let errors = '';
     const timer = setTimeout(() => { child.kill(); reject(new Error('Превышено время ожидания свойств файла')); }, 20000);
@@ -131,32 +155,40 @@ function runPowerShell(mode, filePath, url, date) {
     child.on('error', error => { clearTimeout(timer); reject(error); });
     child.on('close', code => {
       clearTimeout(timer);
-      if (code !== 0 && /0x80070020|0x80070021/i.test(errors)) return reject(new Error('Файл занят другой программой — закройте её или остановите воспроизведение и повторите'));
-      if (code !== 0) return reject(new Error(errors.replace(/\s+/g, ' ').trim().slice(0, 300) || 'Не удалось обработать свойство файла'));
-      try { resolve(JSON.parse(output.trim().split(/\r?\n/).pop())); } catch { reject(new Error('Неожиданный ответ PowerShell')); }
+      let answer = null;
+      try { answer = JSON.parse(output.trim().split(/\r?\n/).pop()); } catch { /* ответа нет — PowerShell упал до try */ }
+      if (answer && answer.error !== undefined) return reject(answerError(answer));
+      if (code !== 0 || !answer) return reject(new Error(code !== 0 ? `PowerShell завершился с кодом ${code}` : 'Неожиданный ответ PowerShell'));
+      resolve(answer);
     });
   });
 }
 
 async function readAuthorUrl(filePath) {
   if (process.platform !== 'win32') return { supported: false, url: '' };
+  try {
+    const direct = await readXtraProperties(filePath);
+    // Ссылка без даты: дата могла остаться в старой «Дате выпуска», которую видит только обработчик Windows.
+    if (!direct.url || direct.published) return { supported: true, url: direct.url, published: normalizePublishedDate(direct.published) };
+  } catch { /* не MP4-структура или ошибка чтения — спросим обработчик Windows */ }
   const result = await runPowerShell('read', filePath);
   return { supported: true, url: typeof result.url === 'string' ? result.url : '', published: normalizePublishedDate(result.published) };
 }
 
 // date — "YYYY-MM-DD" (необязательно): дата публикации записывается тем же проходом вместе со ссылкой.
-async function writeAuthorUrl(filePath, url, date = '') {
+// options.timesFrom — файл, чьи даты создания и изменения получит filePath (запись в копию перед подменой).
+async function writeAuthorUrl(filePath, url, date = '', options = {}) {
   if (process.platform !== 'win32') throw new Error('Запись свойства поддерживается только в Windows');
-  const result = await runPowerShell('write', filePath, url, normalizePublishedDate(date));
+  const result = await runPowerShell('write', filePath, url, normalizePublishedDate(date), options.timesFrom);
   return { ...result, published: normalizePublishedDate(result.published) };
 }
 
 // Только дата публикации (ссылка уже записана).
-async function writePublishedDate(filePath, date) {
+async function writePublishedDate(filePath, date, options = {}) {
   if (process.platform !== 'win32') throw new Error('Запись свойства поддерживается только в Windows');
   const normalized = normalizePublishedDate(date);
   if (!normalized) throw new Error('Некорректная дата публикации');
-  const result = await runPowerShell('writeDate', filePath, '', normalized);
+  const result = await runPowerShell('writeDate', filePath, '', normalized, options.timesFrom);
   return { ...result, published: normalizePublishedDate(result.published) };
 }
 

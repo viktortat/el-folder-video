@@ -20,6 +20,8 @@ const { environmentStatus, listModels, environmentDirectory, downloadEnvironment
 const { isSummaryFresh } = require('../shared/transcript-store-core');
 const youtubeLink = require('./youtube-link-core');
 const { readAuthorUrl, writeAuthorUrl, writePublishedDate } = require('./author-url-property');
+const { PropertyStaging, isStagingFile } = require('./property-staging');
+const { normalizePublishedDate } = require('../shared/published-date-core');
 const { PeakCollector, SAMPLE_RATE, BINS_PER_SECOND } = require('../shared/waveform-core');
 const { RELEASES_API, compareVersions, latestRelease } = require('./update-core');
 const { srtSegments, transcriptBatches, normalizeSummary, FRAME_COUNT, frameTimes, parseVideoLink, parseRegValue, playerLaunch, safeNoteName, buildObsidianArticle, buildObsidianAddendum } = require('./summary-core');
@@ -911,7 +913,7 @@ async function scanFolder(root, recursive) {
         if (recursive && entry.name !== UNDO_DIRECTORY) await walk(entryPath);
         continue;
       }
-      if (!entry.isFile() || !VIDEO_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue;
+      if (!entry.isFile() || !VIDEO_EXTENSIONS.has(path.extname(entry.name).toLowerCase()) || isStagingFile(entry.name)) continue;
       try {
         files.push(toVideoItem(entryPath, await lstat(entryPath)));
       } catch {
@@ -1127,26 +1129,54 @@ ipcMain.handle('folder-video:youtube-search', async (_event, filePath, durationS
 async function freshFileUrl(filePath) {
   try { return toVideoItem(filePath, await lstat(filePath)).url; } catch { return ''; }
 }
+const propertyStaging = new PropertyStaging();
+// url пустой — пишется только дата публикации (ссылка уже есть). Возвращает функцию записи в target с датами timesFrom.
+function propertyWriter(url, published) {
+  return (target, timesFrom) => url
+    ? writeAuthorUrl(target, url, published, { timesFrom })
+    : writePublishedDate(target, published, { timesFrom });
+}
+// Общий хвост записи: содержимое файла изменилось — сбросить кэш имени транскрипции, сохранить копию даты.
+async function finishPropertyWrite(filePath, url, published, result) {
+  if (url) transcriptStore.forget(filePath);
+  if (published) storePublishedDate(filePath, published, Boolean(url));
+  const warnings = [];
+  if (url && !published) warnings.push('Дату публикации получить не удалось');
+  if (!result.datesIntact) warnings.push('Не удалось полностью сохранить даты файла');
+  return { url: result.url || url, published: result.published || '', warning: warnings.join('. '), fileUrl: await freshFileUrl(filePath) };
+}
 async function writeYoutubeLink(filePath, url) {
   const published = await fetchPublishedDate(url);
-  const result = await writeAuthorUrl(filePath, url, published);
-  transcriptStore.forget(filePath);
-  if (published) storePublishedDate(filePath, published, true);
-  const warnings = [];
-  if (!published) warnings.push('Дату публикации получить не удалось');
-  if (!result.datesIntact) warnings.push('Не удалось полностью сохранить даты файла');
-  return { url: result.url, published: result.published || '', warning: warnings.join('. '), fileUrl: await freshFileUrl(filePath) };
+  return finishPropertyWrite(filePath, url, published, await propertyWriter(url, published)(filePath));
 }
+// Дата публикации по ссылке — сетевой запрос (yt-dlp, секунды); идёт отдельно, пока плеер спокойно играет.
+ipcMain.handle('folder-video:youtube-published', async (_event, url) => {
+  if (!youtubeLink.isYouTubeVideoUrl(url)) return { error: 'Некорректная ссылка YouTube' };
+  return { published: await fetchPublishedDate(url) };
+});
 // После нативного window.confirm Windows оставляет окно без клавиатурного фокуса: поля ввода перестают принимать текст.
 ipcMain.handle('folder-video:refocus-window', event => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (win && !win.isDestroyed()) { win.focus(); event.sender.focus(); }
 });
-ipcMain.handle('folder-video:youtube-write', async (_event, filePath, url) => {
+// Запись ссылки и/или даты публикации без сетевых запросов. url пустой — только дата.
+// staged: видео открыто в плеере — свойства пишутся в копию, ответ { token }; подмена — youtube-commit.
+ipcMain.handle('folder-video:youtube-write', async (_event, filePath, url, published, staged) => {
   try {
     if (!isSupportedVideoPath(filePath) || !youtubeLink.isWritableExtension(path.extname(filePath))) return { error: 'Формат не поддерживает запись свойства' };
-    if (!youtubeLink.isYouTubeVideoUrl(url)) return { error: 'Некорректная ссылка YouTube' };
-    return await writeYoutubeLink(filePath, url);
+    const link = url ? String(url) : '';
+    if (link && !youtubeLink.isYouTubeVideoUrl(link)) return { error: 'Некорректная ссылка YouTube' };
+    const date = normalizePublishedDate(published);
+    if (!link && !date) return { error: 'Нечего записывать' };
+    const write = propertyWriter(link, date);
+    if (staged) return { token: (await propertyStaging.stage(filePath, write, { url: link, published: date })).token };
+    return await finishPropertyWrite(filePath, link, date, await write(filePath));
+  } catch (error) { return { error: error.message }; }
+});
+ipcMain.handle('folder-video:youtube-commit', async (_event, token) => {
+  try {
+    const { filePath, result, meta } = await propertyStaging.commit(String(token));
+    return await finishPropertyWrite(filePath, meta.url, meta.published, result);
   } catch (error) { return { error: error.message }; }
 });
 // Пакетная обработка одного файла: status = skipped | date | written | notfound | ambiguous | error.
@@ -1174,18 +1204,6 @@ ipcMain.handle('folder-video:youtube-batch-item', async (_event, filePath) => {
     const result = await writeYoutubeLink(filePath, auto.url);
     return { status: 'written', url: result.url, published: result.published, warning: result.warning };
   } catch (error) { return { status: 'error', error: error.message }; }
-});
-// Дозапрос даты публикации для видео, у которого ссылка уже записана (дата файла не меняется).
-ipcMain.handle('folder-video:youtube-date', async (_event, filePath, url) => {
-  try {
-    if (!isSupportedVideoPath(filePath) || !youtubeLink.isWritableExtension(path.extname(filePath))) return { error: 'Формат не поддерживает запись свойства' };
-    if (!youtubeLink.isYouTubeVideoUrl(url)) return { error: 'Некорректная ссылка YouTube' };
-    const published = await fetchPublishedDate(url);
-    if (!published) return { published: '' };
-    const result = await writePublishedDate(filePath, published);
-    storePublishedDate(filePath, published, false);
-    return { published: result.published || '', warning: result.datesIntact ? '' : 'Не удалось полностью сохранить даты файла', fileUrl: await freshFileUrl(filePath) };
-  } catch (error) { return { error: error.message }; }
 });
 ipcMain.handle('folder-video:youtube-open', async (_event, url) => {
   if (!youtubeLink.isYouTubeVideoUrl(url)) return 'Некорректная ссылка';
@@ -1679,3 +1697,6 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
+
+// Неподменённые копии с записанными свойствами не должны остаться рядом с видео.
+app.on('will-quit', () => { propertyStaging.discardAll(); });
