@@ -1,5 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain, shell, nativeImage, Menu, clipboard, safeStorage, net } = require('electron');
-const { readdir, lstat, stat, rename, copyFile, unlink, readFile, writeFile, mkdir, rm, mkdtemp } = require('node:fs/promises');
+const { lstat,stat, rename, copyFile, unlink, readFile, writeFile, mkdir, rm, mkdtemp } = require('node:fs/promises');
 const { createWriteStream } = require('node:fs');
 const { Readable, Transform } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
@@ -21,6 +21,7 @@ const { isSummaryFresh } = require('../shared/transcript-store-core');
 const youtubeLink = require('./youtube-link-core');
 const { readAuthorUrl, writeAuthorUrl, writePublishedDate } = require('./author-url-property');
 const { PropertyStaging, isStagingFile } = require('./property-staging');
+const { listDirectory } = require('./dir-list');
 const { normalizePublishedDate } = require('../shared/published-date-core');
 const { PeakCollector, SAMPLE_RATE, BINS_PER_SECOND } = require('../shared/waveform-core');
 const { RELEASES_API, compareVersions, latestRelease } = require('./update-core');
@@ -894,10 +895,12 @@ async function scanFolder(root, recursive) {
   const files = [];
   let skipped = 0;
 
+  const isVideo = name => VIDEO_EXTENSIONS.has(path.extname(name).toLowerCase()) && !isStagingFile(name);
+
   async function walk(directory) {
     let entries;
     try {
-      entries = await readdir(directory, { withFileTypes: true });
+      entries = await listDirectory(directory, isVideo);
     } catch {
       skipped += 1;
       return;
@@ -905,20 +908,17 @@ async function scanFolder(root, recursive) {
 
     for (const entry of entries) {
       const entryPath = path.join(directory, entry.name);
-      if (entry.isSymbolicLink()) {
+      if (entry.isSymbolicLink) {
         skipped += 1;
         continue;
       }
-      if (entry.isDirectory()) {
+      if (entry.isDirectory) {
         if (recursive && entry.name !== UNDO_DIRECTORY) await walk(entryPath);
         continue;
       }
-      if (!entry.isFile() || !VIDEO_EXTENSIONS.has(path.extname(entry.name).toLowerCase()) || isStagingFile(entry.name)) continue;
-      try {
-        files.push(toVideoItem(entryPath, await lstat(entryPath)));
-      } catch {
-        skipped += 1;
-      }
+      if (!entry.isFile) continue;
+      if (entry.stat) files.push(toVideoItem(entryPath, entry.stat));
+      else skipped += 1;
     }
   }
 
