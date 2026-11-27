@@ -39,7 +39,7 @@
     stripCache: new Map(), stripPending: new Map(), frameCache: new Map(), favoriteThumbnailCache: new Map(), durationCache: new Map(), extraColumns: localStorage.getItem("folder-video-extra-columns") === "true", youtubeSourceCache: new Map(), youtubeDateTried: new Set(), youtubeBusy: new Set(), captureVideos: new Map(), task: 0, thumbnailGeneration: 0, thumbnailPriority: 0,
     recentFolders: JSON.parse(localStorage.getItem("folder-video-recent") || "[]"),
     pinnedFolders: JSON.parse(localStorage.getItem("folder-video-pinned") || "[]"),
-    recentMoveFolders: (function() { try { var list = JSON.parse(localStorage.getItem("folder-video-recent-move-folders") || "[]"); return Array.isArray(list) ? list.filter(function(item) { return typeof item === "string" && item; }).slice(0, 5) : []; } catch (_) { return []; } })(),
+    recentMoveFolders: (function() { try { var list = JSON.parse(localStorage.getItem("folder-video-recent-move-folders") || "[]"); return Array.isArray(list) ? list.filter(function(item) { return typeof item === "string" && item; }).slice(0, 10) : []; } catch (_) { return []; } })(),
     favorites: JSON.parse(localStorage.getItem("folder-video-favorites") || "[]"), favoritesOpen: false, favoritesOnly: false, favoritesFolderOnly: false,
     recentVideos: JSON.parse(localStorage.getItem("folder-video-recent-videos") || "[]"), recentThumbnailCache: new Map(), recentVideosOpen: false,
     speedUp: null, transcript: null,
@@ -574,7 +574,7 @@
   function rememberMoveFolder(destPath) {
     var dir = String(destPath || '').replace(/[\\/][^\\/]*$/, '');
     if (!dir) return;
-    state.recentMoveFolders = [dir].concat(state.recentMoveFolders.filter(function(item) { return item !== dir; })).slice(0, 5);
+    state.recentMoveFolders = [dir].concat(state.recentMoveFolders.filter(function(item) { return item !== dir; })).slice(0, 10);
     try { localStorage.setItem("folder-video-recent-move-folders", JSON.stringify(state.recentMoveFolders)); } catch (_) {}
   }
   async function moveFile(filePath, targetDir) {
